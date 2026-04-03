@@ -35,6 +35,14 @@ async function handleRequest(req: NextRequest) {
     headers.delete("referer");
     headers.set("origin", target.origin);
 
+    // Inject Custom Cookies
+    const injectCookies = req.cookies.get("inject_cookies")?.value;
+    if (injectCookies) {
+      const decoded = decodeURIComponent(injectCookies);
+      const existing = headers.get("cookie");
+      headers.set("cookie", existing ? `${existing}; ${decoded}` : decoded);
+    }
+
     const init: RequestInit = {
       method: req.method,
       headers,
@@ -85,6 +93,22 @@ async function handleRequest(req: NextRequest) {
             // Base tag injection makes relative paths hit origin. But we want absolute browse paths!
             // Actually, <base href="https://target.com/"> makes everything hit target.com directly.
             // If we want browsing, we leave it, and ServiceWorker intercepts it.
+            // Prepare LocalStorage injection if present
+            const injectLs = req.cookies.get("inject_ls")?.value;
+            let lsScript = "";
+            if (injectLs) {
+              const decoded = decodeURIComponent(injectLs);
+              lsScript = `
+                try {
+                  const lsData = JSON.parse(String.raw\`${decoded.replace(/`/g, "\\`").replace(/\$/g, "\\$")}\`);
+                  for(let key in lsData) {
+                    window.localStorage.setItem(key, typeof lsData[key] === 'object' ? JSON.stringify(lsData[key]) : lsData[key]);
+                  }
+                  console.log('Session injected into LocalStorage');
+                } catch(e) { console.error('LS Inject Error', e); }
+              `;
+            }
+
             // Inject a service worker registrar right into the head:
             const swInject = `<script>
               if ('serviceWorker' in navigator) {
@@ -97,6 +121,7 @@ async function handleRequest(req: NextRequest) {
                 });
               }
               window.BROWSE_TARGET = "${target.origin}";
+              ${lsScript}
             </script>`;
             controller.enqueue(new TextEncoder().encode(text.replace("<head>", `<head>${swInject}`)));
           } else {
