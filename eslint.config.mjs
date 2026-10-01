@@ -12,6 +12,10 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Generated proxy runtime (vendor code copied from node_modules):
+    "public/uv/**",
+    "public/baremux/**",
+    "public/baremod/**",
   ]),
 ]);
 
