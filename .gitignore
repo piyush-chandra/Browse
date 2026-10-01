@@ -22,6 +22,9 @@
 /public/baremux/
 /public/baremod/
 
+# Real-browser profiles (cookies/logins for /remote sessions)
+/data/
+
 # production
 /build
 

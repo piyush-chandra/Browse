@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 
 export default function Home() {
   const [url, setUrl] = useState("");
+  const [mode, setMode] = useState<"fast" | "real">("fast");
   const router = useRouter();
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -16,7 +17,11 @@ export default function Home() {
       target = "https://" + target;
     }
 
-    router.push(`/browse?url=${encodeURIComponent(target)}`);
+    if (mode === "real") {
+      router.push(`/remote?url=${encodeURIComponent(target)}`);
+    } else {
+      router.push(`/browse?url=${encodeURIComponent(target)}`);
+    }
   };
 
   return (
@@ -34,6 +39,36 @@ export default function Home() {
             A seamless bridge to the decentralized web. Access any site securely.
           </p>
         </div>
+
+        <div className="flex items-center justify-center gap-2 mb-6">
+          <button
+            type="button"
+            onClick={() => setMode("fast")}
+            className={`px-4 py-2 rounded-full text-sm font-medium transition-colors ${
+              mode === "fast"
+                ? "bg-white text-black"
+                : "bg-neutral-900 text-neutral-400 border border-neutral-800 hover:text-white"
+            }`}
+          >
+            Fast proxy
+          </button>
+          <button
+            type="button"
+            onClick={() => setMode("real")}
+            className={`px-4 py-2 rounded-full text-sm font-medium transition-colors ${
+              mode === "real"
+                ? "bg-white text-black"
+                : "bg-neutral-900 text-neutral-400 border border-neutral-800 hover:text-white"
+            }`}
+          >
+            Real browser
+          </button>
+        </div>
+        <p className="text-center text-xs text-neutral-500 mb-6 -mt-3">
+          {mode === "fast"
+            ? "Quick browsing through the Ultraviolet proxy."
+            : "A real Chromium for logins (Google/GitHub), captchas and bot checks. Logins persist."}
+        </p>
 
         <form onSubmit={handleSubmit} className="relative">
           <div className="relative group">

@@ -40,6 +40,19 @@ The proxy runtime files (`public/uv/`, `public/baremux/`, `public/baremod/`) are
 node scripts/verify-proxy.mjs https://example.com/
 ```
 
+`scripts/verify-remote.mjs` does the same for a real-browser session (frames, nav events, viewer screenshot):
+
+```bash
+node scripts/verify-remote.mjs https://neetcode.io/
+```
+
+## Two browsing modes
+
+- **Fast proxy** (`/browse`) — Ultraviolet + Bare server. Quick, handles most sites, media streaming, and ordinary cookie logins. Cannot do third-party OAuth (Google/GitHub "Login with…") because the `redirect_uri` would be the proxy origin, which providers reject — and aggressive bot checks may refuse proxied sessions.
+- **Real browser** (`/remote`) — a real Chromium on the server, streamed to your tab via CDP screencast with mouse/keyboard forwarding. Use it for Google/GitHub logins (e.g. NeetCode Sign In → GitHub/Google both reach the genuine provider pages), captchas, and anything the proxy can't do. Sessions persist in `./data/remote/<id>` (default `main`), so you stay logged in across visits; idle browsers are reaped automatically. From any `/browse` page, the **Real browser** button hands the current URL over.
+
+Stealth notes (`lib/remote-manager.cjs`): `--enable-automation` removed, `--headless=new`, `navigator.webdriver` hidden, plus env overrides `CHROME_PATH` and `REMOTE_HEADLESS=false` (headed, if a provider ever demands it).
+
 ## What works / known limits
 
 - Most sites render and navigate correctly, including multi-page flows, forms, images, fonts, and file downloads.

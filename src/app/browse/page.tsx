@@ -183,6 +183,23 @@ function BrowseContent() {
     window.open(PREFIX + window.Ultraviolet.codec.xor.encode(address), "_blank");
   }, [address]);
 
+  // Hand the current page to a real Chromium for logins/bot checks.
+  const openInRealBrowser = useCallback(async () => {
+    if (!address) return;
+    try {
+      const res = await fetch("/api/remote/session", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ url: address }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      router.push(`/remote?session=${encodeURIComponent(data.sessionId)}`);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : String(err));
+    }
+  }, [address, router]);
+
   if (!initialUrl) {
     return (
       <div className="flex bg-neutral-950 items-center justify-center min-h-screen text-white flex-col gap-4">
@@ -257,6 +274,17 @@ function BrowseContent() {
             className="w-full bg-neutral-800 border border-neutral-700 rounded-full px-4 py-2 text-sm text-neutral-200 focus:outline-none focus:border-indigo-500"
           />
         </form>
+
+        <button
+          onClick={openInRealBrowser}
+          title="Open in real browser (for logins)"
+          className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium text-indigo-300 bg-indigo-600/20 border border-indigo-500/40 hover:bg-indigo-600/40 transition-colors whitespace-nowrap"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+            <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l2.197-1.32a1 1 0 00.555-.832V8a1 1 0 00-.555-.832l-2.197-1.32a1 1 0 00-.555 0z" clipRule="evenodd" />
+          </svg>
+          Real browser
+        </button>
 
         <button
           onClick={openInNewTab}
