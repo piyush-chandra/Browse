@@ -46,18 +46,33 @@ export async function GET(req: NextRequest) {
 
   // The Bare server only exists on the custom server (server.js). If this
   // fetch fails, the app was started with plain `next dev`/`next start`.
+  // Try the request origin first, then 127.0.0.1 (localhost can resolve to
+  // ::1 while the server listens on IPv4, or vice versa).
   let bare: { ok: boolean; versions?: string[]; error?: string } = { ok: false };
-  try {
-    const origin = new URL(req.url).origin;
-    const res = await fetch(`${origin}/bare/`, { signal: AbortSignal.timeout(5000) });
-    if (res.ok) {
-      const manifest = (await res.json()) as { versions?: string[] };
-      bare = { ok: true, versions: manifest.versions };
-    } else {
-      bare = { ok: false, error: `HTTP ${res.status}` };
+  const origin = new URL(req.url).origin;
+  const port = new URL(req.url).port || "3000";
+  const candidates = [origin, `http://127.0.0.1:${port}`].filter(
+    (v, i, a) => v && a.indexOf(v) === i
+  );
+  let lastError = "unreachable";
+  for (const base of candidates) {
+    try {
+      const res = await fetch(`${base}/bare/`, { signal: AbortSignal.timeout(5000) });
+      if (res.ok) {
+        const manifest = (await res.json()) as { versions?: string[] };
+        bare = { ok: true, versions: manifest.versions };
+        break;
+      }
+      lastError = `HTTP ${res.status} via ${base}`;
+    } catch (err) {
+      lastError = `${err instanceof Error ? err.message : String(err)} via ${base}`;
     }
-  } catch (err) {
-    bare = { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+  if (!bare.ok) {
+    bare = {
+      ok: false,
+      error: lastError,
+    };
   }
 
   const chrome = findChrome();
