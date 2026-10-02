@@ -17,10 +17,8 @@
 /.next/
 /out/
 
-# Generated proxy runtime (copied from node_modules by scripts/setup-proxy-assets.mjs)
-/public/uv/
-/public/baremux/
-/public/baremod/
+# Proxy runtime is committed (small, ~500KB) so clones work out of the box.
+# scripts/setup-proxy-assets.mjs still refreshes it on install/dev/build.
 
 # Real-browser profiles (cookies/logins for /remote sessions)
 /data/

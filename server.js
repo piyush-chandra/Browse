@@ -9,6 +9,9 @@
 // handle raw socket upgrades. Everything under /bare/ is handled by the Bare
 // server; everything else is handled by Next.js.
 const { createServer } = require("node:http");
+const fs = require("node:fs");
+const path = require("node:path");
+const { execSync } = require("node:child_process");
 const next = require("next");
 const { createBareServer } = require("@tomphttp/bare-server-node");
 const { WebSocketServer } = require("ws");
@@ -103,6 +106,45 @@ async function handleRemoteCookies(req, res, remote) {
     sendJson(res, 500, { error: err.message });
   }
 }
+
+// The proxy runtime lives in public/ and is committed, but a fresh/partial
+// checkout (or a deleted folder) can still miss files. Self-heal on boot so
+// the app never serves a half-working proxy with cryptic 404s.
+function ensureProxyAssets() {
+  const required = [
+    "uv/uv.bundle.js",
+    "uv/uv.client.js",
+    "uv/uv.handler.js",
+    "uv/uv.sw.js",
+    "uv/uv.config.js",
+    "uv/sw.js",
+    "baremux/index.js",
+    "baremux/worker.js",
+    "baremod/index.mjs",
+  ];
+  const missing = required.filter(
+    (f) => !fs.existsSync(path.join(__dirname, "public", f))
+  );
+  if (missing.length === 0) {
+    console.log(`[browse] proxy assets OK (${required.length} files)`);
+    return;
+  }
+  console.log(`[browse] proxy assets missing: ${missing.join(", ")}`);
+  console.log("[browse] regenerating via scripts/setup-proxy-assets.mjs …");
+  try {
+    execSync("node scripts/setup-proxy-assets.mjs", {
+      cwd: __dirname,
+      stdio: "inherit",
+    });
+    console.log("[browse] proxy assets regenerated");
+  } catch {
+    console.error(
+      "[browse] FAILED to regenerate proxy assets. Run manually: node scripts/setup-proxy-assets.mjs"
+    );
+  }
+}
+
+ensureProxyAssets();
 
 app.prepare().then(() => {
   const remote = new RemoteManager();

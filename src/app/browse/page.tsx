@@ -37,30 +37,59 @@ const TRANSPORT = "/baremod/index.mjs";
  */
 let proxyReady: Promise<void> | null = null;
 
+const SCRIPT_TIMEOUT_MS = 15000;
+
 function loadScript(src: string): Promise<void> {
   return new Promise((resolve, reject) => {
-    const existing = document.querySelector<HTMLScriptElement>(
-      `script[data-browse-src="${src}"]`
+    // Drop tags from a previous failed attempt: their load/error events
+    // already fired, so reusing them would hang forever.
+    const stale = document.querySelector<HTMLScriptElement>(
+      `script[data-browse-src="${src}"]:not([data-loaded="true"])`
     );
-    if (existing) {
-      if (existing.dataset.loaded === "true") return resolve();
-      existing.addEventListener("load", () => resolve());
-      existing.addEventListener("error", () =>
-        reject(new Error(`Failed to load ${src}`))
+    if (stale) stale.remove();
+
+    const existing = document.querySelector<HTMLScriptElement>(
+      `script[data-browse-src="${src}"][data-loaded="true"]`
+    );
+    if (existing) return resolve();
+
+    const timer = setTimeout(() => {
+      el.remove();
+      reject(
+        new Error(
+          `Timed out loading ${src}. The proxy files may be missing — restart the app with \`npm run dev\`.`
+        )
       );
-      return;
-    }
+    }, SCRIPT_TIMEOUT_MS);
+
     const el = document.createElement("script");
     el.src = src;
     el.async = false;
     el.dataset.browseSrc = src;
     el.addEventListener("load", () => {
+      clearTimeout(timer);
       el.dataset.loaded = "true";
       resolve();
     });
-    el.addEventListener("error", () => reject(new Error(`Failed to load ${src}`)));
+    el.addEventListener("error", () => {
+      clearTimeout(timer);
+      el.remove();
+      reject(
+        new Error(
+          `Failed to load ${src} (HTTP error). The proxy files may be missing — restart the app with \`npm run dev\`.`
+        )
+      );
+    });
     document.head.appendChild(el);
   });
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms / 1000}s`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
 function initProxy(): Promise<void> {
@@ -87,16 +116,49 @@ function initProxy(): Promise<void> {
     );
 
     await navigator.serviceWorker.register(SW_URL, { scope: "/" });
-    await navigator.serviceWorker.ready;
+    await withTimeout(
+      navigator.serviceWorker.ready,
+      15000,
+      "Service worker activation"
+    );
+
+    // `ready` only means a worker is active — the page itself must also be
+    // *controlled* by it, otherwise /service/ navigations bypass the proxy
+    // and Next.js serves app HTML (e.g. videos fail with network errors).
+    // This is a race with clients.claim(); wait it out, don't hang on it.
+    if (!navigator.serviceWorker.controller) {
+      await withTimeout(
+        new Promise<void>((resolve) => {
+          const onChange = () => {
+            navigator.serviceWorker.removeEventListener("controllerchange", onChange);
+            resolve();
+          };
+          navigator.serviceWorker.addEventListener("controllerchange", onChange);
+          if (navigator.serviceWorker.controller) {
+            navigator.serviceWorker.removeEventListener("controllerchange", onChange);
+            resolve();
+          }
+        }),
+        10000,
+        "Service worker taking control"
+      ).catch(() => {
+        throw new Error(
+          "Service worker is active but not controlling this page. Reload the page to retry. " +
+            "(If this persists, unregister service workers in DevTools > Application.)"
+        );
+      });
+    }
 
     if (!window.BareMux) {
       throw new Error("bare-mux failed to load.");
     }
 
     const connection = new window.BareMux.BareMuxConnection(BAREMUX_WORKER);
-    await connection.setTransport(TRANSPORT, [
-      `${window.location.origin}/bare/`,
-    ]);
+    await withTimeout(
+      connection.setTransport(TRANSPORT, [`${window.location.origin}/bare/`]),
+      15000,
+      "Proxy transport setup"
+    );
   })().catch((error) => {
     proxyReady = null;
     throw error;
@@ -127,11 +189,39 @@ function BrowseContent() {
   const [frame, setFrame] = useState<{ src: string; key: number } | null>(null);
 
   // Boot the proxy, then point the iframe at the encoded target.
+  // A health preflight runs first so backend problems (missing proxy
+  // files, wrong start command) show an actionable error instead of a
+  // spinner. See /api/health for the full diagnostic.
   useEffect(() => {
     if (!initialUrl) return;
     let cancelled = false;
 
-    initProxy()
+    (async () => {
+      // Preflight: fail fast with an actionable message if the backend
+      // isn't right (missing files / wrong start command). If the check
+      // itself is unreachable, fall through to initProxy's own timeouts.
+      try {
+        const res = await fetch("/api/health");
+        if (res.ok) {
+          const health = (await res.json()) as {
+            assets?: { ok: boolean; missing?: string[]; hint?: string };
+            bare?: { ok: boolean; hint?: string };
+          };
+          if (health.assets && !health.assets.ok) {
+            throw new Error(
+              `${health.assets.hint || "Proxy files missing."} Missing: ${(health.assets.missing || []).join(", ")}`
+            );
+          }
+          if (health.bare && !health.bare.ok) {
+            throw new Error(health.bare.hint || "Proxy backend unreachable.");
+          }
+        }
+      } catch (err) {
+        if (err instanceof Error && !err.message.toLowerCase().includes("fetch")) throw err;
+        // health endpoint unreachable — continue; initProxy will time out clearly.
+      }
+      await initProxy();
+    })()
       .then(() => {
         if (cancelled || !window.Ultraviolet) return;
         const src = PREFIX + window.Ultraviolet.codec.xor.encode(initialUrl);
