@@ -63,3 +63,24 @@ Stealth notes (`lib/remote-manager.cjs`): `--enable-automation` removed, `--head
 - Logins that use aggressive bot detection (Google, banks) may refuse proxied sessions. Same reason as above.
 
 If you need guaranteed fidelity for those cases, the alternative is a real headless Chromium per session streamed to the client (Playwright + screencast/WebRTC), which is a different, heavier architecture.
+
+## Deployment — read this before using Vercel
+
+**Vercel (and Netlify serverless) cannot host this app.** They run short-lived functions, but Browse needs a long-lived Node process for three things:
+
+- the custom `server.js` (Bare backend at `/bare/` + remote-browser API),
+- WebSocket upgrades (`/bare/` media/chat, `/remote-ws` screencast) — serverless has no raw socket upgrades,
+- a real Chrome for `/remote` sessions.
+
+On Vercel you will get exactly `Bare backend unreachable` from `/api/health` — that is the app correctly telling you the backend isn't there. Deploy instead on any host that runs `npm start` as a persistent process with WebSocket support:
+
+| Host | How | Remote browser? |
+|---|---|---|
+| Railway | New project → Deploy from repo. It auto-detects Node (`npm run build` / `npm start`). | No Chrome on native Node — fast proxy only. Use Docker deploy for full. |
+| Render | New Web Service → Docker (uses the included `Dockerfile`). | Yes (Chrome baked in). |
+| Fly.io | `fly launch` (detects the `Dockerfile`). | Yes. |
+| Any VPS | `git clone`, `npm ci`, `npm run build`, `HOST=0.0.0.0 npm start` (+ install Chrome for `/remote`). | Yes, if Chrome installed. |
+
+The included `Dockerfile` (Node 20 + Google Chrome, `npm ci` → build → `npm start` on `0.0.0.0:3000`) is the fully-working option. Note: browser profiles live in `./data/remote/` (ephemeral disk = logins reset on redeploy; mount a volume to keep them).
+
+Required env: `HOST=0.0.0.0` inside containers (default `localhost` only binds loopback). Optional: `PORT`, `CHROME_PATH` (defaults to system Chrome), `REMOTE_HEADLESS=false` (headed).
