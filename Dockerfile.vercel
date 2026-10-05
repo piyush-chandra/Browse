@@ -51,9 +51,10 @@ COPY . ./
 RUN npm run build \
   && npm prune --omit=dev
 
-# Bind all interfaces; PORT is injected by Vercel (default 80).
-# Keep the 3000 fallback in server.js for `docker run` without -e PORT.
-ENV HOST=0.0.0.0 NODE_ENV=production
+# Bind all interfaces; Vercel routes to $PORT (default 80). A platform-set
+# PORT always wins over this image default; the 80 default only applies when
+# unset (plain `docker run`). server.js falls back to 3000 if PORT is empty.
+ENV HOST=0.0.0.0 PORT=80 NODE_ENV=production
 EXPOSE 80
 
 CMD ["npm", "start"]
