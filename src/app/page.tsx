@@ -122,7 +122,7 @@ export default function Home() {
           </button>
         </div>
         <p className="text-center text-[11px] text-neutral-600 mt-2">
-          For laptops where Google sign-in is blocked: the login runs on the server's Chrome,
+          For laptops where Google sign-in is blocked: the login runs on the server&apos;s Chrome,
           then the saved profile keeps you signed in everywhere.
         </p>
       </div>
