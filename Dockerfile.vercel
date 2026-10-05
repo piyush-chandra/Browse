@@ -1,0 +1,57 @@
+# Browse on Vercel Functions via "Bring your Dockerfile to Vercel Functions".
+# https://vercel.com/docs/functions/container-images
+#
+# Vercel auto-detects this file (Dockerfile.vercel at the project root),
+# builds it, pushes it to Vercel Container Registry, and routes all traffic
+# to the container on every deploy. No vercel.json required.
+#
+# Contract with Vercel:
+# - listen on $PORT (Vercel sets it; default 80). Never hardcode PORT here —
+#   server.js already does `parseInt(process.env.PORT || "3000", 10)`.
+# - bind 0.0.0.0 (HOST), not localhost.
+# - handle SIGTERM gracefully (server.js does: 30s grace on scale-in).
+#
+# Notes / limits (same as Vercel Functions):
+# - Instances scale to zero after ~5 min idle (prod) / ~30s (preview).
+# - Max duration: 300s Hobby, up to 800s Pro/Enterprise. Long /remote-ws
+#   screencast streams can be cut; the fast proxy (/browse) is unaffected
+#   because each proxied request is short-lived.
+# - Disk is ephemeral: ./data/remote browser profiles reset on scale-in /
+#   redeploy, so /remote logins don't persist on Vercel.
+# - No Secure Compute / Static IPs for container images yet.
+# - Chrome makes the image large (~1.5GB) and cold starts slower. For a
+#   smaller/faster image with fast-proxy only, delete the Chrome install
+#   block below (then /remote reports "No Chrome found", /browse unaffected).
+
+FROM node:22-bookworm-slim
+
+# Google Chrome (for /remote real-browser sessions) + minimal runtime deps.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates wget gnupg \
+  && wget -q -O - https://dl.google.com/linux/linux_signing_key.pub \
+    | gpg --dearmor -o /usr/share/keyrings/google.gpg \
+  && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google.gpg] http://dl.google.com/linux/chrome/deb/ stable main" \
+    > /etc/apt/sources.list.d/google-chrome.list \
+  && apt-get update && apt-get install -y --no-install-recommends \
+    google-chrome-stable \
+  && rm -rf /var/lib/apt/lists/* \
+  && google-chrome --version
+
+ENV CHROME_PATH=/usr/bin/google-chrome
+
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+# Full install: `next build` needs devDependencies (typescript, tailwindcss).
+RUN npm ci
+
+COPY . ./
+RUN npm run build \
+  && npm prune --omit=dev
+
+# Bind all interfaces; PORT is injected by Vercel (default 80).
+# Keep the 3000 fallback in server.js for `docker run` without -e PORT.
+ENV HOST=0.0.0.0 NODE_ENV=production
+EXPOSE 80
+
+CMD ["npm", "start"]

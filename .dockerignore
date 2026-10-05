@@ -3,6 +3,7 @@ node_modules
 .git
 .gitignore
 Dockerfile
+Dockerfile.vercel
 .dockerignore
 npm-debug.log*
 .env*

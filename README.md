@@ -64,18 +64,55 @@ Stealth notes (`lib/remote-manager.cjs`): `--enable-automation` removed, `--head
 
 If you need guaranteed fidelity for those cases, the alternative is a real headless Chromium per session streamed to the client (Playwright + screencast/WebRTC), which is a different, heavier architecture.
 
-## Deployment — read this before using Vercel
+## Deployment — Vercel now works via `Dockerfile.vercel`
 
-**Vercel (and Netlify serverless) cannot host this app.** They run short-lived functions, but Browse needs a long-lived Node process for three things:
+**Netlify serverless still cannot host this app** (short-lived functions, no
+custom server, no raw WebSocket upgrades, no Chrome).
 
-- the custom `server.js` (Bare backend at `/bare/` + remote-browser API),
-- WebSocket upgrades (`/bare/` media/chat, `/remote-ws` screencast) — serverless has no raw socket upgrades,
-- a real Chrome for `/remote` sessions.
+**Vercel works via ["Bring your Dockerfile to Vercel
+Functions"](https://vercel.com/changelog/bring-your-dockerfile-to-vercel-functions)**
+([docs](https://vercel.com/docs/functions/container-images)): Vercel Functions
+now run OCI container images on Fluid compute. This repo ships a
+`Dockerfile.vercel` at the root — Vercel auto-detects it, builds the image,
+pushes it to Vercel Container Registry, and routes all traffic to the
+container on every commit. No `vercel.json` needed.
 
-On Vercel you will get exactly `Bare backend unreachable` from `/api/health` — that is the app correctly telling you the backend isn't there. Deploy instead on any host that runs `npm start` as a persistent process with WebSocket support:
+```bash
+# after pushing to GitHub:
+vercel          # preview deploy, or import the repo in the Vercel dashboard
+vercel --prod   # production deploy
+```
+
+No env vars are required: the image binds `0.0.0.0` and respects Vercel's
+injected `$PORT` (default 80). `npm start` (`server.js`: `/bare/` backend +
+`/remote-ws` screencast + Next.js) runs as the container's HTTP server and
+handles `SIGTERM` on scale-in.
+
+Vercel caveats (same [limits](https://vercel.com/docs/functions/limitations)
+as Vercel Functions):
+
+- **Scale to zero**: idle instances stop after ~5 min (prod) / ~30s (preview).
+  The fast proxy (`/browse`) is unaffected — each proxied request is
+  short-lived. Long `/remote-ws` screencast streams can be cut (max duration
+  300s Hobby, up to 800s Pro/Enterprise).
+- **Ephemeral disk**: `./data/remote/` browser profiles vanish on scale-in /
+  redeploy, so `/remote` logins don't persist on Vercel. Use it for one-off
+  logins/bot checks, not persistent sessions.
+- **Cold starts**: the Chrome layer makes the image ~1.5GB. For a smaller /
+  faster-booting image with fast-proxy only, delete the Chrome install block
+  in `Dockerfile.vercel` — then `/remote` reports "No Chrome found" while
+  `/browse` keeps working.
+- **Memory**: Chrome + Next fits in Hobby's 2 GB but is happier on Pro's
+  4 GB if you use `/remote` heavily.
+- No Secure Compute / Static IPs for container images yet — `googlevideo.com`
+  403s from a flagged egress network apply here too (see limits below).
+- Test locally with `vercel dev` (needs the `docker` CLI + daemon).
+
+Other hosts that run `npm start` as a persistent process:
 
 | Host | How | Remote browser? |
 |---|---|---|
+| Vercel | Import repo (or `vercel --prod`). Uses `Dockerfile.vercel` automatically. | Yes, but ephemeral (profiles reset; streams capped by max duration). |
 | Railway | New project → Deploy from repo. It auto-detects Node (`npm run build` / `npm start`). | No Chrome on native Node — fast proxy only. Use Docker deploy for full. |
 | Render | New Web Service → Docker (uses the included `Dockerfile`). | Yes (Chrome baked in). |
 | Fly.io | `fly launch` (detects the `Dockerfile`). | Yes. |

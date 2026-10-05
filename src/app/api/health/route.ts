@@ -46,12 +46,17 @@ export async function GET(req: NextRequest) {
 
   // The Bare server only exists on the custom server (server.js). If this
   // fetch fails, the app was started with plain `next dev`/`next start`.
-  // Try the request origin first, then 127.0.0.1 (localhost can resolve to
-  // ::1 while the server listens on IPv4, or vice versa).
+  // Probe the loopback interface on our own listening port first: behind a
+  // reverse proxy or in a container (Vercel Dockerfile.vercel, Docker, Fly)
+  // the public origin's port is not our local port (Vercel injects $PORT,
+  // default 80, and terminates TLS at the edge), so `origin` alone can miss.
+  // Fall back to the request origin (covers HOST=localhost dev, where the
+  // URL port is the real one). 127.0.0.1 avoids localhost IPv6/IPv4 mismatch.
   let bare: { ok: boolean; versions?: string[]; error?: string } = { ok: false };
   const origin = new URL(req.url).origin;
-  const port = new URL(req.url).port || "3000";
-  const candidates = [origin, `http://127.0.0.1:${port}`].filter(
+  const urlPort = new URL(req.url).port;
+  const localPort = process.env.PORT || urlPort || "3000";
+  const candidates = [`http://127.0.0.1:${localPort}`, origin].filter(
     (v, i, a) => v && a.indexOf(v) === i
   );
   let lastError = "unreachable";
