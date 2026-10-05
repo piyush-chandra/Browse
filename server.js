@@ -17,6 +17,7 @@ const { createBareServer } = require("@tomphttp/bare-server-node");
 const { WebSocketServer } = require("ws");
 const { RemoteManager } = require("./lib/remote-manager.cjs");
 const profileStore = require("./lib/profile-store.cjs");
+const vault = require("./lib/proxy-vault.cjs");
 
 const dev = process.env.NODE_ENV !== "production";
 const hostname = process.env.HOST || "localhost";
@@ -27,6 +28,9 @@ const handle = app.getRequestHandler();
 
 const bare = createBareServer("/bare/", {
   logErrors: true,
+  // Local/loopback targets are blocked by default (SSRF protection into
+  // host-local services). BARE_ALLOW_LOCAL=1 permits them (local testing).
+  blockLocal: process.env.BARE_ALLOW_LOCAL !== "1",
   // The default limiter allows only 10 keep-alive requests per IP per minute,
   // which a single proxied page blows through instantly (every subresource is
   // a request). Keep the limiter as a safety net but make it realistic.
@@ -114,6 +118,57 @@ async function handleRemoteProfile(req, res, remote) {
 // POST /api/remote/session { sessionId?, url? } -> { sessionId, url, title }
 // GET  /api/remote/session?id=...                -> describe | 404
 // DELETE /api/remote/session?id=...              -> { ok }
+// Fast-proxy cookie vault API.
+// POST   /api/proxy/vault { sessionId?, url } -> vault the real browser's
+//        cookies for that origin -> { ok, host, cookies }
+// GET    /api/proxy/vault -> { configured, hosts }
+// DELETE /api/proxy/vault?host=... -> forget that origin
+// Guarded by IMPORT_TOKEN when set (session material!).
+async function handleProxyVault(req, res, remote) {
+  try {
+    const url = new URL(req.url, "http://localhost");
+    if (process.env.IMPORT_TOKEN) {
+      const auth = String(req.headers.authorization || "");
+      if (auth !== `Bearer ${process.env.IMPORT_TOKEN}`) {
+        return sendJson(res, 401, { error: "import token required" });
+      }
+    }
+    if (req.method === "POST") {
+      const body = await readJson(req);
+      const target = String(body.url || "").trim();
+      if (!target) return sendJson(res, 400, { error: "url required" });
+      const host = new URL(target).hostname.toLowerCase();
+      const cookies = await remote.getCookies(body.sessionId || "google", target);
+      const header = vault.cookiesToHeader(cookies, host);
+      if (!header) {
+        return sendJson(res, 404, {
+          error: `no cookies for ${host} in session ${body.sessionId || "google"} — log in there in the real browser first`,
+        });
+      }
+      vault.set(host, header);
+      return sendJson(res, 200, {
+        ok: true,
+        host,
+        cookies: header.split("; ").length,
+      });
+    }
+    if (req.method === "GET") {
+      return sendJson(res, 200, {
+        configured: vault.blobEnabled(),
+        hosts: vault.list(),
+      });
+    }
+    if (req.method === "DELETE") {
+      const ok = vault.remove(url.searchParams.get("host") || "");
+      return sendJson(res, ok ? 200 : 404, { ok });
+    }
+    sendJson(res, 405, { error: "method not allowed" });
+  } catch (err) {
+    console.error("[vault] api error:", err.message);
+    sendJson(res, 500, { error: err.message });
+  }
+}
+
 // POST /api/remote/session { sessionId? } -> probe ONLY (no Chrome launch):
 //   { sessionId, exists, url?, title? }
 // Session creation lives on the /remote-ws rendezvous (lazy, instance-local,
@@ -242,10 +297,39 @@ async function ensureXvfb() {
 app.prepare().then(async () => {
   await ensureXvfb();
   const remote = new RemoteManager();
+  vault.load(); // restore fast-proxy cookie vault (blob or disk)
+
+  // Auto-vault: whenever the real browser lands somewhere (login flows,
+  // OAuth redirects), mirror its cookies into the fast proxy for that
+  // origin. Google/YouTube excluded: their sign-in never works through a
+  // fetch proxy (transport-level), so vaulting their cookies adds risk
+  // with no benefit.
+  const VAULT_SKIP = new Set([
+    "accounts.google.com",
+    "google.com",
+    "youtube.com",
+    "youtu.be",
+    "accounts.youtube.com",
+  ]);
+  remote.onNavigate = (session) => {
+    try {
+      if (!session.url || session.url === "about:blank") return;
+      const host = new URL(session.url).hostname.toLowerCase().replace(/^www\./, "");
+      if (VAULT_SKIP.has(host)) return;
+      remote
+        .getCookies(session.id, session.url)
+        .then((cookies) => {
+          const header = vault.cookiesToHeader(cookies, host);
+          if (header) vault.set(host, header);
+        })
+        .catch(() => {});
+    } catch {}
+  };
   const remoteWss = new WebSocketServer({ noServer: true });
 
   const server = createServer((req, res) => {
     if (bare.shouldRoute(req)) {
+      vault.inject(req); // server-side cookie injection (httpOnly-safe)
       bare.routeRequest(req, res);
       return;
     }
@@ -259,6 +343,10 @@ app.prepare().then(async () => {
       handleRemoteProfile(req, res, remote);
       return;
     }
+    if (req.url === "/api/proxy/vault" || req.url.startsWith("/api/proxy/vault?")) {
+      handleProxyVault(req, res, remote);
+      return;
+    }
     if (req.url.startsWith("/api/remote/cookies")) {
       handleRemoteCookies(req, res, remote);
       return;
@@ -268,6 +356,7 @@ app.prepare().then(async () => {
 
   server.on("upgrade", (req, socket, head) => {
     if (bare.shouldRoute(req)) {
+      vault.inject(req);
       bare.routeUpgrade(req, socket, head);
       return;
     }

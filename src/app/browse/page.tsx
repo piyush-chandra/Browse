@@ -174,6 +174,32 @@ function BrowseContent() {
     void openInRealBrowser(address, "google");
   }, [address, openInRealBrowser]);
 
+  // Vault the real browser's cookies for the current origin into the fast
+  // proxy, then reload the frame — the proxied site now sees a logged-in
+  // session (works for httpOnly cookies; the injection is server-side).
+  const [vaultBusy, setVaultBusy] = useState(false);
+  const useMyLogin = useCallback(async () => {
+    if (!address || vaultBusy) return;
+    setVaultBusy(true);
+    try {
+      const res = await fetch("/api/proxy/vault", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ sessionId: "google", url: address }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      // Fresh request through the proxy now carries the vaulted cookies.
+      setFrame((current) =>
+        current ? { src: current.src, key: current.key + 1 } : current
+      );
+    } catch (err) {
+      alert(err instanceof Error ? err.message : String(err));
+    } finally {
+      setVaultBusy(false);
+    }
+  }, [address, vaultBusy]);
+
   const isOAuthSite = (() => {
     try {
       const host = new URL(address).hostname.toLowerCase();
@@ -292,6 +318,18 @@ function BrowseContent() {
             Sign in with Google
           </button>
         )}
+
+        <button
+          onClick={useMyLogin}
+          disabled={vaultBusy}
+          title="Browse this site in the fast proxy using your real-browser login (copies that session's cookies server-side for this origin)"
+          className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium text-emerald-300 bg-emerald-600/20 border border-emerald-500/40 hover:bg-emerald-600/40 transition-colors whitespace-nowrap disabled:opacity-50"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+            <path fillRule="evenodd" d="M2.166 4.999A11.954 11.954 0 0010 1.944 11.954 11.954 0 0017.834 5c.11.65.166 1.32.166 2v2.22c0 4.24-2.674 8.09-6.733 9.563a1.5 1.5 0 01-.738 0C6.326 17.3 3.652 13.46 3.652 9.22V7c0-.68.056-1.35.166-2.001z" clipRule="evenodd" />
+          </svg>
+          {vaultBusy ? "Vaulting…" : "Use my login"}
+        </button>
       </div>
 
       {/* Content */}
