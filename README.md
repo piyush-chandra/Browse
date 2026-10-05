@@ -131,3 +131,21 @@ Google sign-in cannot complete in the fast proxy (provider-level bot checks; see
 3. Nothing to set? Profiles persist on the host's local disk (`./data/remote/<id>`) — fine on Railway/Render/Fly/VPS, wiped on Vercel.
 
 Snapshots fire after every navigation, on session close, and on SIGTERM (Vercel gives ~30s grace on scale-in). Only the useful subset of the Chrome profile is uploaded (cookies, local/indexed storage, prefs — **not** saved passwords unless `PROFILE_KEEP_LOGINS=1`), pruned and size-capped (`PROFILE_MAX_MB`, default 25 MB). Manage via `GET/POST/DELETE /api/remote/profile`. `/remote` shows the active mode in its toolbar (`profile: vercel-blob` vs `profile: local`).
+
+`/remote` on Vercel is resilient by design: the WebSocket is the rendezvous (it creates the session lazily on the instance holding the stream — no cross-instance 404s), auto-reconnects after Vercel's per-connection caps (≈5 min on Hobby) and steers the fresh instance back to the page you were on, with the persisted profile restored so you're still logged in.
+
+### Skip logging in entirely: import your desktop login
+
+Already signed in on this computer? Import that login into the remote session once — no typing credentials into `/remote` at all:
+
+```bash
+node scripts/import-local-profile.mjs \
+  --url https://browse-delta.vercel.app \
+  --session google \
+  --domains accounts.google.com,google.com,neetcode.io \
+  --token <IMPORT_TOKEN>          # if you set IMPORT_TOKEN on the server
+```
+
+Close Chrome first for a clean snapshot. The script launches *your own* Chrome headless on a copy of your profile — your Chrome decrypts its own cookies (they're Keychain-encrypted, so raw file copies are useless off-machine) — extracts cookies for the listed domains, and POSTs them to `/api/remote/profile/cookies`, which injects them into the session and saves the profile to Blob. Then `browse-delta.vercel.app/remote?session=google` opens **already logged in** to Google (and any imported site); "Continue with Google" on NeetCode is one click.
+
+⚠️ `/api/remote/profile/cookies` is powerful (cookie injection). On public deployments set `IMPORT_TOKEN` in Vercel project env — the endpoint then requires `Authorization: Bearer <IMPORT_TOKEN>`. Windows Chrome ≥127 (App-Bound Encryption) is not supported by the extraction path.

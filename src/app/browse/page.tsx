@@ -149,22 +149,21 @@ function BrowseContent() {
   }, [address]);
 
   // Hand the current page to a real Chromium for logins/bot checks.
-  const openInRealBrowser = useCallback(async (targetUrl?: string, sessionName?: string) => {
-    const goto = targetUrl || address;
-    if (!goto) return;
-    try {
-      const res = await fetch("/api/remote/session", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ url: goto, sessionId: sessionName || undefined }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-      router.push(`/remote?session=${encodeURIComponent(data.sessionId)}`);
-    } catch (err) {
-      alert(err instanceof Error ? err.message : String(err));
-    }
-  }, [address, router]);
+  // Direct navigation (no POST): the /remote page's WebSocket creates the
+  // session lazily on whichever instance holds the stream — the reliable
+  // path on Fluid-style hosts where HTTP and WS can land on different
+  // instances.
+  const openInRealBrowser = useCallback(
+    (targetUrl?: string, sessionName?: string) => {
+      const goto = targetUrl || address;
+      if (!goto) return;
+      const id = sessionName || "main";
+      router.push(
+        `/remote?session=${encodeURIComponent(id)}&url=${encodeURIComponent(goto)}`
+      );
+    },
+    [address, router]
+  );
 
   // One-click Google sign-in: opens the REAL browser (fast proxy provably
   // can't do Google logins) on a dedicated "google" session whose profile

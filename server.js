@@ -66,9 +66,29 @@ function readJson(req) {
 // GET    /api/remote/profile            -> { provider, configured }
 // POST   /api/remote/profile { sessionId? } -> save now -> { ok, bytes? }
 // DELETE /api/remote/profile?id=...     -> remove stored snapshot -> { ok }
+// POST   /api/remote/profile/cookies { sessionId?, cookies:[...] }
+//        -> inject cookies (e.g. exported from your desktop Chrome) into
+//           the session and persist them -> { ok, imported }
+//        Guarded by IMPORT_TOKEN (Authorization: Bearer …) when set —
+//        SET IT on public deployments: cookie injection is powerful.
 async function handleRemoteProfile(req, res, remote) {
   try {
     const url = new URL(req.url, "http://localhost");
+    if (req.method === "POST" && url.pathname.endsWith("/cookies")) {
+      if (process.env.IMPORT_TOKEN) {
+        const auth = String(req.headers.authorization || "");
+        if (auth !== `Bearer ${process.env.IMPORT_TOKEN}`) {
+          return sendJson(res, 401, { error: "import token required" });
+        }
+      } else {
+        console.warn(
+          "[remote] cookie import WITHOUT IMPORT_TOKEN — set IMPORT_TOKEN on public deployments"
+        );
+      }
+      const body = await readJson(req);
+      const result = await remote.importCookies(body.sessionId || "google", body.cookies);
+      return sendJson(res, 200, { ok: true, ...result });
+    }
     if (req.method === "GET") {
       return sendJson(res, 200, {
         provider: profileStore.provider,
@@ -94,16 +114,25 @@ async function handleRemoteProfile(req, res, remote) {
 // POST /api/remote/session { sessionId?, url? } -> { sessionId, url, title }
 // GET  /api/remote/session?id=...                -> describe | 404
 // DELETE /api/remote/session?id=...              -> { ok }
+// POST /api/remote/session { sessionId? } -> probe ONLY (no Chrome launch):
+//   { sessionId, exists, url?, title? }
+// Session creation lives on the /remote-ws rendezvous (lazy, instance-local,
+// profile-restoring). Launching Chrome from an arbitrary HTTP-routed
+// instance is exactly how Vercel deployments used to end up with the
+// session on the wrong instance.
+// GET  /api/remote/session?id=...                -> describe | 404
+// DELETE /api/remote/session?id=...              -> { ok }
 async function handleRemoteSession(req, res, remote) {
   try {
     const url = new URL(req.url, "http://localhost");
     if (req.method === "POST") {
       const body = await readJson(req);
-      const session = await remote.getOrCreate(body.sessionId, body.url);
+      const id = String(body.sessionId || "main");
+      const info = remote.describe(id);
       sendJson(res, 200, {
-        sessionId: session.id,
-        url: session.url,
-        title: session.title,
+        sessionId: id,
+        exists: info !== null,
+        ...(info ? { url: info.url, title: info.title } : {}),
       });
     } else if (req.method === "GET") {
       const info = remote.describe(url.searchParams.get("id"));
@@ -191,7 +220,7 @@ app.prepare().then(() => {
       handleRemoteSession(req, res, remote);
       return;
     }
-    if (req.url === "/api/remote/profile" || req.url.startsWith("/api/remote/profile?")) {
+    if (req.url === "/api/remote/profile" || req.url.startsWith("/api/remote/profile/")) {
       handleRemoteProfile(req, res, remote);
       return;
     }
@@ -208,9 +237,11 @@ app.prepare().then(() => {
       return;
     }
     if (req.url === "/remote-ws" || req.url.startsWith("/remote-ws?")) {
-      const sessionId = new URL(req.url, "http://localhost").searchParams.get("sessionId");
+      const wsUrl = new URL(req.url, "http://localhost");
+      const sessionId = wsUrl.searchParams.get("sessionId");
+      const initialUrl = wsUrl.searchParams.get("url") || undefined;
       remoteWss.handleUpgrade(req, socket, head, (ws) => {
-        remote.handleConnection(ws, sessionId);
+        remote.handleConnection(ws, sessionId, initialUrl);
       });
       return;
     }

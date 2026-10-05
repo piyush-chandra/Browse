@@ -18,14 +18,17 @@ function RemoteContent() {
   const sessionParam = searchParams.get("session") || "main";
   const urlParam = searchParams.get("url") || "";
 
-  const [sessionId, setSessionId] = useState(sessionParam);
-  const [ready, setReady] = useState(false);
+  const sessionId = sessionParam;
+  const ready = true; // WS owns creation; no POST gate
   const [status, setStatus] = useState<Status>("starting");
   const [pageUrl, setPageUrl] = useState("");
   const [pageTitle, setPageTitle] = useState("");
   const [input, setInput] = useState(urlParam);
   const [notice, setNotice] = useState<string | null>(null);
   const [profileState, setProfileState] = useState<string | null>(null);
+  const wsRef = useRef<WebSocket | null>(null);
+  const reconnectRef = useRef(0);
+  const lastPageUrlRef = useRef<string>(urlParam);
 
   // Profile-storage status (external persistence for the session's Chrome
   // profile). Surfaced in the toolbar so "will my login survive?" is
@@ -41,71 +44,79 @@ function RemoteContent() {
 
   const imgRef = useRef<HTMLImageElement>(null);
   const viewerRef = useRef<HTMLDivElement>(null);
-  const wsRef = useRef<WebSocket | null>(null);
   const lastMoveRef = useRef(0);
 
-  // 1. Ensure the server-side browser session exists.
-  useEffect(() => {
-    let cancelled = false;
-    fetch("/api/remote/session", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ sessionId: sessionParam, url: urlParam || undefined }),
-    })
-      .then(async (res) => {
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-        if (!cancelled) {
-          setSessionId(data.sessionId);
-          setReady(true);
-        }
-      })
-      .catch((err: unknown) => {
-        if (!cancelled) {
-          setNotice(err instanceof Error ? err.message : String(err));
-          setStatus("error");
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [sessionParam, urlParam]);
-
-  // 2. Stream frames + page state over WebSocket.
+  // 2. Stream frames + page state over WebSocket. The WS is THE rendezvous:
+  // it's long-lived (pinned to one Fluid instance) and its admission step
+  // creates the session on demand — so cross-instance session 404s, the
+  // classic Vercel breakage, can't strand the viewer.
   useEffect(() => {
     if (!ready) return;
-    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const ws = new WebSocket(
-      `${proto}//${window.location.host}/remote-ws?sessionId=${encodeURIComponent(sessionId)}`
-    );
-    wsRef.current = ws;
-    ws.onopen = () => setStatus("live");
-    ws.onclose = () => {
-      setStatus("disconnected");
-      wsRef.current = null;
-    };
-    ws.onerror = () => setStatus("error");
-    ws.onmessage = (event) => {
-      try {
-        const msg = JSON.parse(String(event.data));
-        if (msg.type === "frame") {
-          if (imgRef.current) imgRef.current.src = `data:image/jpeg;base64,${msg.data}`;
-        } else if (msg.type === "nav" || msg.type === "hello") {
-          setPageUrl(msg.url || "");
-          setPageTitle(msg.title || "");
-          setInput(msg.url || "");
-        } else if (msg.type === "error") {
-          setNotice(String(msg.message || "remote error"));
+    let closed = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const connect = () => {
+      if (closed) return;
+      const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+      const urlQ = urlParam ? `&url=${encodeURIComponent(urlParam)}` : "";
+      const ws = new WebSocket(
+        `${proto}//${window.location.host}/remote-ws?sessionId=${encodeURIComponent(sessionId)}${urlQ}`
+      );
+      wsRef.current = ws;
+      ws.onopen = () => setStatus("live");
+      ws.onclose = () => {
+        wsRef.current = null;
+        if (closed) return;
+        setStatus("disconnected");
+        // Auto-reconnect: Vercel caps each connection (Hobby ≈ 5 min,
+        // Pro ≈ 13-30 min) and instances scale to zero. The server saves
+        // the profile on close, and the session restores on reconnect, so
+        // resuming is cheap. Cap retries so a dead deploy doesn't spin.
+        reconnectRef.current += 1;
+        if (reconnectRef.current <= 5) {
+          setStatus("starting");
+          const delay = Math.min(1000 * reconnectRef.current, 4000);
+          retryTimer = setTimeout(connect, delay);
         }
-      } catch {
-        // ignore malformed frames
-      }
+      };
+      ws.onerror = () => setStatus("error");
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(String(event.data));
+          if (msg.type === "frame") {
+            reconnectRef.current = 0;
+            if (imgRef.current) imgRef.current.src = `data:image/jpeg;base64,${msg.data}`;
+          } else if (msg.type === "hello") {
+            // Reconnect resume: a fresh instance (or a scaled-away one)
+            // starts on a different page than where we were — steer it back.
+            const helloUrl = String(msg.url || "");
+            if (lastPageUrlRef.current && helloUrl !== lastPageUrlRef.current) {
+              send(ws, { type: "navigate", url: lastPageUrlRef.current });
+            }
+          } else if (msg.type === "nav") {
+            setPageUrl(msg.url || "");
+            setPageTitle(msg.title || "");
+            setInput(msg.url || "");
+            if (msg.url) lastPageUrlRef.current = String(msg.url);
+          } else if (msg.type === "error") {
+            setNotice(String(msg.message || "remote error"));
+          }
+        } catch {
+          // ignore malformed frames
+        }
+      };
     };
+    connect();
     return () => {
-      ws.close();
+      closed = true;
+      if (retryTimer) clearTimeout(retryTimer);
+      wsRef.current?.close();
       wsRef.current = null;
     };
-  }, [ready, sessionId]);
+    // urlParam is read only at connect time (initial navigation target);
+    // re-running on every ?url change would tear down a live stream.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId]);
 
   const toViewport = useCallback((clientX: number, clientY: number) => {
     const img = imgRef.current;
