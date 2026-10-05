@@ -43,7 +43,9 @@ WORKDIR /app
 
 COPY package.json package-lock.json ./
 # Full install: `next build` needs devDependencies (typescript, tailwindcss).
-RUN npm ci
+# --ignore-scripts: our postinstall (scripts/setup-proxy-assets.mjs) runs at
+# the prebuild step instead — scripts/ isn't COPYed into the image yet here.
+RUN npm ci --ignore-scripts
 
 COPY . ./
 RUN npm run build \
