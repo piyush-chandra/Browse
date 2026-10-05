@@ -121,3 +121,13 @@ Other hosts that run `npm start` as a persistent process:
 The included `Dockerfile` (Node 20 + Google Chrome, `npm ci` → build → `npm start` on `0.0.0.0:3000`) is the fully-working option. Note: browser profiles live in `./data/remote/` (ephemeral disk = logins reset on redeploy; mount a volume to keep them).
 
 Required env: `HOST=0.0.0.0` inside containers (default `localhost` only binds loopback). Optional: `PORT`, `CHROME_PATH` (defaults to system Chrome), `REMOTE_HEADLESS=false` (headed).
+
+## Staying logged in (Google & co)
+
+Google sign-in cannot complete in the fast proxy (provider-level bot checks; see limits above) — `/browse` shows a banner and a one-click **Sign in with Google** button that hands the site to the real browser instead. The real browser (`/remote`) *can* do Google logins; to make them **persist** (log in once, stay logged in across restarts and Vercel scale-in), configure external profile storage:
+
+1. In Vercel: Project → **Storage** → create **Blob** → connect to the project (injects `BLOB_READ_WRITE_TOKEN`). Push/redeploy — done.
+2. On any other host: set `PROFILE_HTTP_URL` (must contain `{id}`) plus optional `PROFILE_HTTP_TOKEN`.
+3. Nothing to set? Profiles persist on the host's local disk (`./data/remote/<id>`) — fine on Railway/Render/Fly/VPS, wiped on Vercel.
+
+Snapshots fire after every navigation, on session close, and on SIGTERM (Vercel gives ~30s grace on scale-in). Only the useful subset of the Chrome profile is uploaded (cookies, local/indexed storage, prefs — **not** saved passwords unless `PROFILE_KEEP_LOGINS=1`), pruned and size-capped (`PROFILE_MAX_MB`, default 25 MB). Manage via `GET/POST/DELETE /api/remote/profile`. `/remote` shows the active mode in its toolbar (`profile: vercel-blob` vs `profile: local`).
