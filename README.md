@@ -132,6 +132,22 @@ Google sign-in cannot complete in the fast proxy (provider-level bot checks; see
 
 Snapshots fire after every navigation, on session close, and on SIGTERM (Vercel gives ~30s grace on scale-in). Only the useful subset of the Chrome profile is uploaded (cookies, local/indexed storage, prefs — **not** saved passwords unless `PROFILE_KEEP_LOGINS=1`), pruned and size-capped (`PROFILE_MAX_MB`, default 25 MB). Manage via `GET/POST/DELETE /api/remote/profile`. `/remote` shows the active mode in its toolbar (`profile: vercel-blob` vs `profile: local`).
 
+### Fast proxy with your login (cookie vault)
+
+Log in once in the real browser, then use the FAST proxy for the site:
+
+- **Automatic**: every real-browser navigation mirrors that session's cookies for the landing origin into the fast-proxy cookie vault (8s debounce). Google/YouTube are excluded — their sign-in never works through a fetch proxy, so vaulting their cookies adds risk without benefit.
+- **Manual**: on any `/browse` page, the **Use my login** button copies the `google` session's cookies for the current origin into the vault and reloads the frame — you land logged-in.
+- Works for `httpOnly` cookies (injection is server-side, into `x-bare-headers` before the Bare server routes the request — client-side `document.cookie` cannot set httpOnly).
+- Stored in Blob (`proxy-vault.json`) or on disk (`data/proxy-vault.json`); loaded at boot.
+- `GET/DELETE /api/proxy/vault` to inspect/forget origins. IMPORT_TOKEN guards it when set.
+
+### Vercel Blob setup (2 minutes, once)
+
+1. Vercel dashboard → your Browse project → **Storage** tab → **Create Database → Blob** → name it → connect to the project. This injects `BLOB_READ_WRITE_TOKEN`.
+2. Redeploy (any push, or Deployments → Redeploy). Done — profiles and the cookie vault now persist across restarts and scale-in.
+3. Optional hardening: add `IMPORT_TOKEN` (random string) to project env vars — cookie import and vault APIs then require `Authorization: Bearer <IMPORT_TOKEN>`.
+
 `/remote` on Vercel is resilient by design: the WebSocket is the rendezvous (it creates the session lazily on the instance holding the stream — no cross-instance 404s), auto-reconnects after Vercel's per-connection caps (≈5 min on Hobby) and steers the fresh instance back to the page you were on, with the persisted profile restored so you're still logged in.
 
 ### Skip logging in entirely: import your desktop login
