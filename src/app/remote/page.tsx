@@ -123,9 +123,14 @@ function RemoteContent() {
     if (!img) return null;
     const rect = img.getBoundingClientRect();
     if (rect.width === 0 || rect.height === 0) return null;
+    // Map by the frame's real dimensions, not the nominal viewport —
+    // screencast frames can be scaled/letterboxed and a hardcoded
+    // 1280x800 skews every click.
+    const vw = img.naturalWidth || VIEWPORT.width;
+    const vh = img.naturalHeight || VIEWPORT.height;
     return {
-      x: Math.round(((clientX - rect.left) * VIEWPORT.width) / rect.width),
-      y: Math.round(((clientY - rect.top) * VIEWPORT.height) / rect.height),
+      x: Math.round(((clientX - rect.left) * vw) / rect.width),
+      y: Math.round(((clientY - rect.top) * vh) / rect.height),
     };
   }, []);
 

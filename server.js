@@ -205,7 +205,42 @@ function ensureProxyAssets() {
 
 ensureProxyAssets();
 
-app.prepare().then(() => {
+// Xvfb: real (headed) Chrome on displayless containers. Google actively
+// rejects headless Chrome at login ("This browser or app may not be
+// secure") — headed under a virtual display removes the headless
+// fingerprint (UA, flags, binary behavior). No-op on macOS/dev machines.
+async function ensureXvfb() {
+  if (process.platform !== "linux" || process.env.DISPLAY) return;
+  const { spawn } = require("node:child_process");
+  if (!fs.existsSync("/usr/bin/Xvfb")) {
+    console.log("[browse] no Xvfb installed; remote browsers stay headless");
+    return;
+  }
+  const xvfb = spawn(
+    "Xvfb",
+    [":99", "-screen", "0", "1280x800x24", "-nolisten", "tcp"],
+    { stdio: "ignore" }
+  );
+  xvfb.on("error", (err) => {
+    console.log(`[browse] Xvfb failed to start (${err.message}); staying headless`);
+    delete process.env.DISPLAY;
+  });
+  process.on("exit", () => {
+    try {
+      xvfb.kill();
+    } catch {}
+  });
+  // Wait for the X socket so the first Chrome launch can't race it.
+  for (let i = 0; i < 50; i++) {
+    if (fs.existsSync("/tmp/.X11-unix/X99")) break;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  process.env.DISPLAY = ":99";
+  console.log("[browse] Xvfb ready on :99 (headed remote browsers)");
+}
+
+app.prepare().then(async () => {
+  await ensureXvfb();
   const remote = new RemoteManager();
   const remoteWss = new WebSocketServer({ noServer: true });
 

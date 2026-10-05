@@ -33,7 +33,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google.gpg] http://dl.google.com/linux/chrome/deb/ stable main" \
     > /etc/apt/sources.list.d/google-chrome.list \
   && apt-get update && apt-get install -y --no-install-recommends \
-    google-chrome-stable \
+    google-chrome-stable xvfb fonts-liberation fonts-noto-color-emoji fonts-noto-cjk \
   && rm -rf /var/lib/apt/lists/* \
   && google-chrome --version
 
