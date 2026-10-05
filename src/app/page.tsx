@@ -96,6 +96,35 @@ export default function Home() {
             </div>
           </div>
         </form>
+
+        {/* Blocked-Google escape hatch: company laptops that block Google
+            sign-in still work here, because the login happens on the
+            server's real Chrome, not on this machine. Profile persists in
+            external storage when configured. */}
+        <div className="mt-5 flex justify-center">
+          <button
+            type="button"
+            onClick={() =>
+              router.push(
+                `/remote?session=google&url=${encodeURIComponent("https://accounts.google.com/")} `
+                  .trim()
+              )
+            }
+            className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium text-white bg-neutral-900 border border-neutral-700 hover:border-neutral-500 transition-colors"
+          >
+            <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
+              <path fill="#EA4335" d="M12 5.3c1.7 0 3 .7 3.9 1.6l2.9-2.9C17 2.2 14.7 1.2 12 1.2 7.9 1.2 4.3 3.6 2.6 7.1l3.4 2.6C6.8 7.1 9.2 5.3 12 5.3z" />
+              <path fill="#4285F4" d="M22.6 12.2c0-.8-.1-1.5-.2-2.2H12v4.4h6c-.3 1.4-1 2.5-2.1 3.3l3.3 2.6c2-1.8 3.4-4.6 3.4-8.1z" />
+              <path fill="#FBBC05" d="M6 14.3c-.3-.8-.4-1.5-.4-2.3s.2-1.6.4-2.3L2.6 7.1C1.8 8.6 1.3 10.3 1.3 12s.5 3.4 1.3 4.9l3.4-2.6z" />
+              <path fill="#34A853" d="M12 22.8c3.1 0 5.7-1 7.2-2.8l-3.3-2.6c-.9.6-2.2 1.1-3.9 1.1-2.8 0-5.2-1.9-6-4.4l-3.4 2.6c1.7 3.6 5.3 6.1 9.4 6.1z" />
+            </svg>
+            Sign in with Google (server-side)
+          </button>
+        </div>
+        <p className="text-center text-[11px] text-neutral-600 mt-2">
+          For laptops where Google sign-in is blocked: the login runs on the server's Chrome,
+          then the saved profile keeps you signed in everywhere.
+        </p>
       </div>
     </div>
   );
