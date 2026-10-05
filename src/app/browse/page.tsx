@@ -149,13 +149,14 @@ function BrowseContent() {
   }, [address]);
 
   // Hand the current page to a real Chromium for logins/bot checks.
-  const openInRealBrowser = useCallback(async () => {
-    if (!address) return;
+  const openInRealBrowser = useCallback(async (targetUrl?: string, sessionName?: string) => {
+    const goto = targetUrl || address;
+    if (!goto) return;
     try {
       const res = await fetch("/api/remote/session", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ url: address }),
+        body: JSON.stringify({ url: goto, sessionId: sessionName || undefined }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
@@ -164,6 +165,24 @@ function BrowseContent() {
       alert(err instanceof Error ? err.message : String(err));
     }
   }, [address, router]);
+
+  // One-click Google sign-in: opens the REAL browser (fast proxy provably
+  // can't do Google logins) on a dedicated "google" session whose profile
+  // is persisted to external storage when configured, and carries the user
+  // back to where they were after sign-in (Google usually re-lands you on
+  // the site itself; otherwise doesGoogleNav below).
+  const openGoogleSignIn = useCallback(() => {
+    void openInRealBrowser(address, "google");
+  }, [address, openInRealBrowser]);
+
+  const isOAuthSite = (() => {
+    try {
+      const host = new URL(address).hostname.toLowerCase();
+      return /(^|\.)neetcode\.io$/.test(host) || /(^|\.)leetcode\.com$/.test(host);
+    } catch {
+      return false;
+    }
+  })();
 
   if (!initialUrl) {
     return (
@@ -241,7 +260,7 @@ function BrowseContent() {
         </form>
 
         <button
-          onClick={openInRealBrowser}
+          onClick={() => openInRealBrowser()}
           title="Open in real browser (for logins)"
           className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium text-indigo-300 bg-indigo-600/20 border border-indigo-500/40 hover:bg-indigo-600/40 transition-colors whitespace-nowrap"
         >
@@ -261,6 +280,19 @@ function BrowseContent() {
             <path d="M5 5a2 2 0 00-2 2v8a2 2 0 002 2h8a2 2 0 002-2v-3a1 1 0 10-2 0v3H5V7h3a1 1 0 000-2H5z" />
           </svg>
         </button>
+
+        {isOAuthSite && (
+          <button
+            onClick={openGoogleSignIn}
+            title="Sign in with Google in the real browser — the google session's profile is saved when profile storage is configured, so you stay logged in"
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium text-white bg-[#4285F4]/90 hover:bg-[#4285F4] transition-colors whitespace-nowrap"
+          >
+            <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
+              <path fill="#ffffff" d="M12.48 10.92v3.28h7.84c-.24 1.85-.853 3.187-1.787 4.133-1.147 1.147-2.933 2.4-6.053 2.4-4.827 0-8.6-3.893-8.6-8.72s3.773-8.72 8.6-8.72c2.6 0 4.507 1.027 5.907 2.347l2.307-2.307C18.747 1.44 16.133 0 12.48 0 5.867 0 .307 5.387.307 12s5.56 12 12.173 12c3.573 0 6.267-1.173 8.373-3.36 2.16-2.16 2.84-5.213 2.84-7.667 0-.76-.053-1.467-.173-2.053H12.48z" />
+            </svg>
+            Sign in with Google
+          </button>
+        )}
       </div>
 
       {/* Content */}
@@ -273,7 +305,7 @@ function BrowseContent() {
             {tip.title} — {tip.body}
           </p>
           <button
-            onClick={openInRealBrowser}
+            onClick={() => openInRealBrowser()}
             className="px-2.5 py-1 rounded-md font-medium text-black bg-amber-300 hover:bg-amber-200 transition-colors whitespace-nowrap"
           >
             Open in Real browser

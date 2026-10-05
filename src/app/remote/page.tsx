@@ -25,6 +25,19 @@ function RemoteContent() {
   const [pageTitle, setPageTitle] = useState("");
   const [input, setInput] = useState(urlParam);
   const [notice, setNotice] = useState<string | null>(null);
+  const [profileState, setProfileState] = useState<string | null>(null);
+
+  // Profile-storage status (external persistence for the session's Chrome
+  // profile). Surfaced in the toolbar so "will my login survive?" is
+  // answerable at a glance.
+  useEffect(() => {
+    fetch("/api/remote/profile")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (d) setProfileState(d.configured ? String(d.provider) : "local disk");
+      })
+      .catch(() => {});
+  }, []);
 
   const imgRef = useRef<HTMLImageElement>(null);
   const viewerRef = useRef<HTMLDivElement>(null);
@@ -223,6 +236,22 @@ function RemoteContent() {
           <span className="text-xs text-neutral-400 hidden sm:inline">
             {status === "live" ? "Real browser" : status}
             {sessionId !== "main" ? ` · ${sessionId}` : ""}
+          </span>
+          <span
+            className={`hidden md:inline text-xs px-1.5 py-0.5 rounded ${
+              profileState === "local disk"
+                ? "bg-neutral-800 text-neutral-400"
+                : profileState
+                  ? "bg-emerald-900/60 text-emerald-300"
+                  : ""
+            }`}
+            title={
+              profileState === "local disk"
+                ? "Profile persists on this host's disk only — logins may vanish on redeploy/scale-in (ephemeral hosts)"
+                : `Profile snapshots to external storage (${profileState}) after navigation — logins survive restarts`
+            }
+          >
+            {profileState === "local disk" ? "profile: local" : profileState ? `profile: ${profileState}` : ""}
           </span>
         </div>
       </div>

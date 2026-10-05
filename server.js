@@ -16,6 +16,7 @@ const next = require("next");
 const { createBareServer } = require("@tomphttp/bare-server-node");
 const { WebSocketServer } = require("ws");
 const { RemoteManager } = require("./lib/remote-manager.cjs");
+const profileStore = require("./lib/profile-store.cjs");
 
 const dev = process.env.NODE_ENV !== "production";
 const hostname = process.env.HOST || "localhost";
@@ -59,6 +60,35 @@ function readJson(req) {
     });
     req.on("error", reject);
   });
+}
+
+// Profile persistence API (external storage; no-op unless configured).
+// GET    /api/remote/profile            -> { provider, configured }
+// POST   /api/remote/profile { sessionId? } -> save now -> { ok, bytes? }
+// DELETE /api/remote/profile?id=...     -> remove stored snapshot -> { ok }
+async function handleRemoteProfile(req, res, remote) {
+  try {
+    const url = new URL(req.url, "http://localhost");
+    if (req.method === "GET") {
+      return sendJson(res, 200, {
+        provider: profileStore.provider,
+        configured: profileStore.provider !== "disabled",
+      });
+    }
+    if (req.method === "POST") {
+      const body = await readJson(req);
+      const result = await remote.saveProfile(body.sessionId || "main");
+      return sendJson(res, 200, { ok: true, provider: profileStore.provider, bytes: result ? result.bytes : undefined });
+    }
+    if (req.method === "DELETE") {
+      const ok = await profileStore.remove(url.searchParams.get("id") || "main");
+      return sendJson(res, ok ? 200 : 404, { ok });
+    }
+    sendJson(res, 405, { error: "method not allowed" });
+  } catch (err) {
+    console.error("[remote] profile api error:", err.message);
+    sendJson(res, 500, { error: err.message });
+  }
 }
 
 // POST /api/remote/session { sessionId?, url? } -> { sessionId, url, title }
@@ -161,6 +191,10 @@ app.prepare().then(() => {
       handleRemoteSession(req, res, remote);
       return;
     }
+    if (req.url === "/api/remote/profile" || req.url.startsWith("/api/remote/profile?")) {
+      handleRemoteProfile(req, res, remote);
+      return;
+    }
     if (req.url.startsWith("/api/remote/cookies")) {
       handleRemoteCookies(req, res, remote);
       return;
@@ -197,9 +231,28 @@ app.prepare().then(() => {
     );
   });
 
-  const shutdown = () => {
-    bare.close();
+  // Vercel scale-in (and any SIGTERM-based host) gives ~30s grace: flush
+  // every live session's profile to external storage before dying. This is
+  // what makes "log in once, stay logged in" survive cold containers.
+  let shuttingDown = false;
+  const shutdown = async () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log("[browse] shutdown: flushing remote profiles…");
+    const deadline = Date.now() + 12000; // leave room for server.close()
+    const jobs = remote
+      .listSessions()
+      .filter((s) => s.userDataDir)
+      .map((s) => profileStore.saveRaw(s.id, s.userDataDir).catch((err) => {
+        console.warn(`[browse] profile flush ${s.id} failed: ${err.message}`);
+      }));
+    await Promise.race([Promise.all(jobs), new Promise((r) => setTimeout(r, Math.max(0, deadline - Date.now())))]);
+    try {
+      await bare.close();
+    } catch {}
     server.close(() => process.exit(0));
+    // Absolute backstop if close() hangs (pending websockets etc.)
+    setTimeout(() => process.exit(0), 3000).unref();
   };
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
