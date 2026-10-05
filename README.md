@@ -59,7 +59,7 @@ Stealth notes (`lib/remote-manager.cjs`): `--enable-automation` removed, `--head
 - Cookie-based logins work (handled by Ultraviolet's cookie jar + the Bare server), e.g. the GitHub sign-in page loads and submits.
 - Plain `<video>`/`<audio>` streaming works, including seeking (`Range` requests are forwarded).
 - Sites using WebSockets work (the Bare server handles `Upgrade`).
-- **YouTube pages render** (watch page, search, recommendations) but **video playback is blocked by YouTube itself**: `googlevideo.com` returns `403 Forbidden` for media segments even for direct requests from this network (verified with `curl`, outside the proxy). No fetch-based proxy can fix that from a flagged network — it needs either a clean egress IP or a real remote browser (see below).
+- **YouTube pages render** (watch page, search, recommendations) but **video playback is blocked by YouTube itself**: `googlevideo.com` returns `403 Forbidden` for media segments even for direct requests from this network (verified with `curl`, outside the proxy). No fetch-based proxy can fix that from a flagged network — it needs either a clean egress IP or a real remote browser. The `/browse` viewer shows a banner on YouTube pages with a one-click **Open in Real browser** handoff for this reason.
 - Logins that use aggressive bot detection (Google, banks) may refuse proxied sessions. Same reason as above.
 
 If you need guaranteed fidelity for those cases, the alternative is a real headless Chromium per session streamed to the client (Playwright + screencast/WebRTC), which is a different, heavier architecture.

@@ -3,178 +3,14 @@
 import { useSearchParams, useRouter } from "next/navigation";
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 
-declare global {
-  interface Window {
-    BareMux?: {
-      BareMuxConnection: new (worker: string) => {
-        setTransport: (path: string, options: unknown[]) => Promise<void>;
-      };
-    };
-    Ultraviolet?: {
-      codec: {
-        xor: {
-          encode: (url: string) => string;
-          decode: (encoded: string) => string;
-        };
-      };
-    };
-  }
-}
+import {
+  PREFIX,
+  initProxy,
+  normalizeUrl,
+} from "@/lib/proxy-boot";
 
-const PREFIX = "/service/";
-const SW_URL = "/uv/sw.js";
-const BAREMUX_WORKER = "/baremux/worker.js";
-const TRANSPORT = "/baremod/index.mjs";
-
-/**
- * Boots the proxy exactly once per page load:
- *  1. load bare-mux + the Ultraviolet bundle
- *  2. register the Ultraviolet service worker at root scope
- *  3. tell bare-mux which transport to use (our /bare/ server)
- *
- * The service worker pulls its transport port from this page, so this must
- * finish before the first /service/ request is made.
- */
-let proxyReady: Promise<void> | null = null;
-
-const SCRIPT_TIMEOUT_MS = 15000;
-
-function loadScript(src: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    // Drop tags from a previous failed attempt: their load/error events
-    // already fired, so reusing them would hang forever.
-    const stale = document.querySelector<HTMLScriptElement>(
-      `script[data-browse-src="${src}"]:not([data-loaded="true"])`
-    );
-    if (stale) stale.remove();
-
-    const existing = document.querySelector<HTMLScriptElement>(
-      `script[data-browse-src="${src}"][data-loaded="true"]`
-    );
-    if (existing) return resolve();
-
-    const timer = setTimeout(() => {
-      el.remove();
-      reject(
-        new Error(
-          `Timed out loading ${src}. The proxy files may be missing — restart the app with \`npm run dev\`.`
-        )
-      );
-    }, SCRIPT_TIMEOUT_MS);
-
-    const el = document.createElement("script");
-    el.src = src;
-    el.async = false;
-    el.dataset.browseSrc = src;
-    el.addEventListener("load", () => {
-      clearTimeout(timer);
-      el.dataset.loaded = "true";
-      resolve();
-    });
-    el.addEventListener("error", () => {
-      clearTimeout(timer);
-      el.remove();
-      reject(
-        new Error(
-          `Failed to load ${src} (HTTP error). The proxy files may be missing — restart the app with \`npm run dev\`.`
-        )
-      );
-    });
-    document.head.appendChild(el);
-  });
-}
-
-function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
-  let timer: ReturnType<typeof setTimeout>;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms / 1000}s`)), ms);
-  });
-  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
-}
-
-function initProxy(): Promise<void> {
-  if (proxyReady) return proxyReady;
-
-  proxyReady = (async () => {
-    await loadScript("/baremux/index.js");
-    await loadScript("/uv/uv.bundle.js");
-
-    if (!("serviceWorker" in navigator)) {
-      throw new Error("Service workers are not supported in this browser.");
-    }
-
-    // Clean up the legacy hand-rolled proxy service worker, if present.
-    const registrations = await navigator.serviceWorker.getRegistrations();
-    await Promise.all(
-      registrations
-        .filter((registration) =>
-          [registration.installing, registration.waiting, registration.active].some(
-            (worker) => worker?.scriptURL.includes("/browse-sw.js")
-          )
-        )
-        .map((registration) => registration.unregister())
-    );
-
-    await navigator.serviceWorker.register(SW_URL, { scope: "/" });
-    await withTimeout(
-      navigator.serviceWorker.ready,
-      15000,
-      "Service worker activation"
-    );
-
-    // `ready` only means a worker is active — the page itself must also be
-    // *controlled* by it, otherwise /service/ navigations bypass the proxy
-    // and Next.js serves app HTML (e.g. videos fail with network errors).
-    // This is a race with clients.claim(); wait it out, don't hang on it.
-    if (!navigator.serviceWorker.controller) {
-      await withTimeout(
-        new Promise<void>((resolve) => {
-          const onChange = () => {
-            navigator.serviceWorker.removeEventListener("controllerchange", onChange);
-            resolve();
-          };
-          navigator.serviceWorker.addEventListener("controllerchange", onChange);
-          if (navigator.serviceWorker.controller) {
-            navigator.serviceWorker.removeEventListener("controllerchange", onChange);
-            resolve();
-          }
-        }),
-        10000,
-        "Service worker taking control"
-      ).catch(() => {
-        throw new Error(
-          "Service worker is active but not controlling this page. Reload the page to retry. " +
-            "(If this persists, unregister service workers in DevTools > Application.)"
-        );
-      });
-    }
-
-    if (!window.BareMux) {
-      throw new Error("bare-mux failed to load.");
-    }
-
-    const connection = new window.BareMux.BareMuxConnection(BAREMUX_WORKER);
-    await withTimeout(
-      connection.setTransport(TRANSPORT, [`${window.location.origin}/bare/`]),
-      15000,
-      "Proxy transport setup"
-    );
-  })().catch((error) => {
-    proxyReady = null;
-    throw error;
-  });
-
-  return proxyReady;
-}
-
-function normalizeUrl(raw: string): string {
-  const trimmed = raw.trim();
-  if (!trimmed) return "";
-  if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(trimmed)) {
-    return `https://${trimmed}`;
-  }
-  return trimmed;
-}
+// Proxy boot (service-worker registration, bare-mux transport) lives in
+// @/lib/proxy-boot so the /service/ cold-load route can reuse it.
 
 function BrowseContent() {
   const searchParams = useSearchParams();
@@ -187,6 +23,22 @@ function BrowseContent() {
   const [address, setAddress] = useState(initialUrl);
   const [input, setInput] = useState(initialUrl);
   const [frame, setFrame] = useState<{ src: string; key: number } | null>(null);
+  const [showTubeTip, setShowTubeTip] = useState(true);
+
+  // YouTube blocks proxied media (googlevideo.com 403s cloud egress), so the
+  // watch page renders but the player stays blank. Nudge toward /remote.
+  const isYouTube = (() => {
+    try {
+      const host = new URL(address).hostname.toLowerCase();
+      return host === "youtu.be" || /(^|\.)youtube\.com$/.test(host);
+    } catch {
+      return false;
+    }
+  })();
+
+  useEffect(() => {
+    setShowTubeTip(true);
+  }, [address]);
 
   // Boot the proxy, then point the iframe at the encoded target.
   // A health preflight runs first so backend problems (missing proxy
@@ -389,6 +241,30 @@ function BrowseContent() {
       </div>
 
       {/* Content */}
+      {status === "ready" && isYouTube && showTubeTip && (
+        <div className="flex items-center gap-3 px-4 py-2 bg-amber-500/10 border-b border-amber-500/30 text-amber-200 text-xs flex-shrink-0">
+          <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 flex-shrink-0" viewBox="0 0 20 20" fill="currentColor">
+            <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+          </svg>
+          <p className="flex-1">
+            YouTube blocks video playback through proxies — the page loads but the player stays blank.
+            Use the real browser for actual playback.
+          </p>
+          <button
+            onClick={openInRealBrowser}
+            className="px-2.5 py-1 rounded-md font-medium text-black bg-amber-300 hover:bg-amber-200 transition-colors whitespace-nowrap"
+          >
+            Open in Real browser
+          </button>
+          <button
+            onClick={() => setShowTubeTip(false)}
+            title="Dismiss"
+            className="p-1 rounded text-amber-300/70 hover:text-amber-100 transition-colors"
+          >
+            ✕
+          </button>
+        </div>
+      )}
       <div className="flex-1 w-full relative bg-white">
         {status === "loading" && (
           <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-4 bg-neutral-950 text-neutral-300">

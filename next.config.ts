@@ -2,7 +2,26 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   async headers() {
+    // NOTE on ordering: when several rules match one path, the LAST rule
+    // wins for a repeated header key (verified live: the generic pattern
+    // below used to shadow /uv/sw.js's no-store). So the service-worker
+    // rule stays last.
     return [
+      {
+        // Proxy runtime files are copied from node_modules on every dev/build,
+        // so always revalidate them.
+        source: "/:dir(baremux|baremod)/:path*",
+        headers: [
+          { key: "Cache-Control", value: "public, max-age=0, must-revalidate" },
+        ],
+      },
+      {
+        // Same for the Ultraviolet client files (bundle/handler/config).
+        source: "/uv/:path*",
+        headers: [
+          { key: "Cache-Control", value: "public, max-age=0, must-revalidate" },
+        ],
+      },
       {
         // The Ultraviolet service worker must be allowed to control the whole
         // origin (it intercepts /service/<encoded-url> requests), and it must
@@ -11,14 +30,6 @@ const nextConfig: NextConfig = {
         headers: [
           { key: "Service-Worker-Allowed", value: "/" },
           { key: "Cache-Control", value: "no-store, max-age=0" },
-        ],
-      },
-      {
-        // Proxy runtime files are copied from node_modules on every dev/build,
-        // so always revalidate them.
-        source: "/:dir(uv|baremux|baremod)/:path*",
-        headers: [
-          { key: "Cache-Control", value: "public, max-age=0, must-revalidate" },
         ],
       },
     ];
