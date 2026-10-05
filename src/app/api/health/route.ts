@@ -82,10 +82,23 @@ export async function GET(req: NextRequest) {
 
   const chrome = findChrome();
   const ok = missingAssets.length === 0 && bare.ok;
+  // On Vercel, bare.ok === false means the deploy ran as plain Next.js
+  // instead of building Dockerfile.vercel (custom server.js never started).
+  // Call it out explicitly: the generic "use npm start" hint misleads here.
+  const onVercel = process.env.VERCEL === "1";
+  const bareHint = bare.ok
+    ? undefined
+    : onVercel
+      ? "Running on Vercel WITHOUT the container: this deploy used plain Next.js, so custom server.js (/bare/) never started. Make sure Dockerfile.vercel is on the deployed branch (commit 84c5115+), then redeploy — the build logs should show a container/image build, not `next build`."
+      : "Bare backend unreachable. Start with `npm run dev` / `npm start` (custom server.js), not plain `next dev`.";
 
   return NextResponse.json({
     ok,
     customServer: bare.ok,
+    platform: {
+      vercel: onVercel,
+      vercelEnv: process.env.VERCEL_ENV || null,
+    },
     assets: {
       ok: missingAssets.length === 0,
       missing: missingAssets,
@@ -95,9 +108,7 @@ export async function GET(req: NextRequest) {
     },
     bare: {
       ...bare,
-      hint: bare.ok
-        ? undefined
-        : "Bare backend unreachable. Start with `npm run dev` / `npm start` (custom server.js), not plain `next dev`.",
+      hint: bareHint,
     },
     remote: {
       ok: chrome !== null,
