@@ -23,21 +23,44 @@ function BrowseContent() {
   const [address, setAddress] = useState(initialUrl);
   const [input, setInput] = useState(initialUrl);
   const [frame, setFrame] = useState<{ src: string; key: number } | null>(null);
-  const [showTubeTip, setShowTubeTip] = useState(true);
+  const [showTip, setShowTip] = useState(true);
 
-  // YouTube blocks proxied media (googlevideo.com 403s cloud egress), so the
-  // watch page renders but the player stays blank. Nudge toward /remote.
-  const isYouTube = (() => {
+  // Some flows can't survive the fast proxy, and they fail confusingly
+  // (silent dead buttons, blank players). Name the problem in the UI and
+  // offer the one-click handoff to the real browser:
+  // - YouTube: googlevideo.com 403s cloud egress → player stays blank.
+  // - Google sign-in: the login request is rejected from proxied pages.
+  // - GitHub login pages: OAuth/API handshakes break under rewriting.
+  const tip: { title: string; body: string } | null = (() => {
     try {
-      const host = new URL(address).hostname.toLowerCase();
-      return host === "youtu.be" || /(^|\.)youtube\.com$/.test(host);
+      const u = new URL(address);
+      const host = u.hostname.toLowerCase();
+      if (host === "youtu.be" || /(^|\.)youtube\.com$/.test(host)) {
+        return {
+          title: "YouTube blocks video playback through proxies",
+          body: "the page loads but the player stays blank. Use the real browser for actual playback.",
+        };
+      }
+      if (host === "accounts.google.com") {
+        return {
+          title: "Google sign-in can't complete in the fast proxy",
+          body: "Google rejects the login request from proxied pages. Continue in the real browser instead.",
+        };
+      }
+      if (host === "github.com" && u.pathname.toLowerCase().startsWith("/login")) {
+        return {
+          title: "GitHub login may fail in the fast proxy",
+          body: "login handshakes often break under proxy rewriting. If sign-in stalls, continue in the real browser.",
+        };
+      }
+      return null;
     } catch {
-      return false;
+      return null;
     }
   })();
 
   useEffect(() => {
-    setShowTubeTip(true);
+    setShowTip(true);
   }, [address]);
 
   // Boot the proxy, then point the iframe at the encoded target.
@@ -241,14 +264,13 @@ function BrowseContent() {
       </div>
 
       {/* Content */}
-      {status === "ready" && isYouTube && showTubeTip && (
+      {status === "ready" && tip && showTip && (
         <div className="flex items-center gap-3 px-4 py-2 bg-amber-500/10 border-b border-amber-500/30 text-amber-200 text-xs flex-shrink-0">
           <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 flex-shrink-0" viewBox="0 0 20 20" fill="currentColor">
             <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
           </svg>
           <p className="flex-1">
-            YouTube blocks video playback through proxies — the page loads but the player stays blank.
-            Use the real browser for actual playback.
+            {tip.title} — {tip.body}
           </p>
           <button
             onClick={openInRealBrowser}
@@ -257,7 +279,7 @@ function BrowseContent() {
             Open in Real browser
           </button>
           <button
-            onClick={() => setShowTubeTip(false)}
+            onClick={() => setShowTip(false)}
             title="Dismiss"
             className="p-1 rounded text-amber-300/70 hover:text-amber-100 transition-colors"
           >
