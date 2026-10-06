@@ -139,14 +139,25 @@ Log in once in the real browser, then use the FAST proxy for the site:
 - **Automatic**: every real-browser navigation mirrors that session's cookies for the landing origin into the fast-proxy cookie vault (8s debounce). Google/YouTube are excluded — their sign-in never works through a fetch proxy, so vaulting their cookies adds risk without benefit.
 - **Manual**: on any `/browse` page, the **Use my login** button copies the `google` session's cookies for the current origin into the vault and reloads the frame — you land logged-in.
 - Works for `httpOnly` cookies (injection is server-side, into `x-bare-headers` before the Bare server routes the request — client-side `document.cookie` cannot set httpOnly).
-- Stored in Blob (`proxy-vault.json`) or on disk (`data/proxy-vault.json`); loaded at boot.
+- Stored in Blob (`proxy-vault.json`) or on disk (`data/proxy-vault.json`); loaded at boot and re-pulled (throttled) whenever a request misses, so a login vaulted on one Vercel instance starts serving on the others within ~30s.
 - `GET/DELETE /api/proxy/vault` to inspect/forget origins. IMPORT_TOKEN guards it when set.
 
 ### Vercel Blob setup (2 minutes, once)
 
-1. Vercel dashboard → your Browse project → **Storage** tab → **Create Database → Blob** → name it → connect to the project. This injects `BLOB_READ_WRITE_TOKEN`.
-2. Redeploy (any push, or Deployments → Redeploy). Done — profiles and the cookie vault now persist across restarts and scale-in.
-3. Optional hardening: add `IMPORT_TOKEN` (random string) to project env vars — cookie import and vault APIs then require `Authorization: Bearer <IMPORT_TOKEN>`.
+1. Vercel dashboard → your Browse project → **Storage** tab → **Create Database → Blob** → name it → **Connect to Project** → pick the Browse project, environment **Production** (check Production AND Preview). This injects `BLOB_READ_WRITE_TOKEN`.
+2. **Redeploy — this is the step everyone misses.** Connecting a store does NOT touch running deployments: env vars only apply to *new* deployments. Deployments → ⋯ → Redeploy (or push any commit).
+3. Optional hardening: add `IMPORT_TOKEN` (random string) to project env vars (Production) — cookie import and vault APIs then require `Authorization: Bearer <IMPORT_TOKEN>`. The **Use my login** button and import script support it (the UI prompts once and remembers it in that browser). Redeploy again after adding it.
+
+**Verify it actually took** (the #1 cause of "logins don't stick" is Blob connected-but-never-redeployed, or connected to Preview only):
+
+```bash
+curl -s https://YOUR-DEPLOYMENT/api/health | jq .persistence
+# want: {"blob":true,"profileHttp":false,"importToken":true}
+curl -s https://YOUR-DEPLOYMENT/api/remote/profile   # want: {"provider":"vercel-blob","configured":true}
+curl -s https://YOUR-DEPLOYMENT/api/proxy/vault      # 401 if IMPORT_TOKEN set (good); want: {"configured":true,...}
+```
+
+If `blob` is still `false` after connecting: you redeployed too early, scoped it to Preview, or connected the store to a different Vercel project.
 
 `/remote` on Vercel is resilient by design: the WebSocket is the rendezvous (it creates the session lazily on the instance holding the stream — no cross-instance 404s), auto-reconnects after Vercel's per-connection caps (≈5 min on Hobby) and steers the fresh instance back to the page you were on, with the persisted profile restored so you're still logged in.
 

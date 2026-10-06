@@ -8,6 +8,7 @@ import {
   initProxy,
   normalizeUrl,
 } from "@/lib/proxy-boot";
+import { authFetch } from "@/lib/api-auth";
 
 // Proxy boot (service-worker registration, bare-mux transport) lives in
 // @/lib/proxy-boot so the /service/ cold-load route can reuse it.
@@ -182,7 +183,7 @@ function BrowseContent() {
     if (!address || vaultBusy) return;
     setVaultBusy(true);
     try {
-      const res = await fetch("/api/proxy/vault", {
+      const res = await authFetch("/api/proxy/vault", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ sessionId: "google", url: address }),

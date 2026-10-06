@@ -138,7 +138,22 @@ async function handleProxyVault(req, res, remote) {
       const target = String(body.url || "").trim();
       if (!target) return sendJson(res, 400, { error: "url required" });
       const host = new URL(target).hostname.toLowerCase();
-      const cookies = await remote.getCookies(body.sessionId || "google", target);
+      let cookies;
+      try {
+        cookies = await remote.getCookies(body.sessionId || "google", target);
+      } catch (err) {
+        if (err && /no such session/.test(String(err.message))) {
+          // The real-browser session lives on the WS-pinned instance; this
+          // HTTP request can land on a different one. Auto-vault already
+          // runs there on every navigation, so this is only a force-refresh.
+          return sendJson(res, 409, {
+            error:
+              `session "${body.sessionId || "google"}" isn't on this instance. ` +
+              "Open /remote?session=google, let the page load once (auto-vault runs on navigation), then retry.",
+          });
+        }
+        throw err;
+      }
       const header = vault.cookiesToHeader(cookies, host);
       if (!header) {
         return sendJson(res, 404, {

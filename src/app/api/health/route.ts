@@ -115,5 +115,16 @@ export async function GET(req: NextRequest) {
       chrome,
       hint: chrome ? undefined : "No Chrome/Chromium found. Set CHROME_PATH. /remote needs it; /browse does not.",
     },
+    // Setup verification: without Blob, logins and the cookie vault reset
+    // on every instance recycle (Vercel Hobby recycles aggressively) — the
+    // classic "I logged in yesterday and it's gone" failure.
+    persistence: {
+      blob: !!process.env.BLOB_READ_WRITE_TOKEN,
+      profileHttp: !!process.env.PROFILE_HTTP_URL,
+      importToken: !!process.env.IMPORT_TOKEN,
+      hint: !process.env.BLOB_READ_WRITE_TOKEN && !process.env.PROFILE_HTTP_URL
+        ? "No profile/vault persistence: connect Vercel Blob (Project → Storage → Create Database → Blob → Connect, Production env) AND redeploy — env vars only apply to new deployments. Until then, every login vanishes with the instance."
+        : undefined,
+    },
   });
 }
