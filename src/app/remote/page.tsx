@@ -12,6 +12,22 @@ function send(ws: WebSocket | null, obj: unknown) {
   if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj));
 }
 
+// Single-use OAuth URLs die with the flow that created them (Firebase
+// __/auth/handler results, Google/GitHub login pages mid-flow). Navigating
+// the main tab to one — or back to a stale one after reconnect — strands
+// the viewer on a blank page and kills the login. They are never valid
+// steer targets.
+const TRANSIENT_URL = /\/__\/auth\/handler|accounts\.google\.com|accounts\.youtube\.com|github\.com\/login/i;
+
+function normUrl(u: string): string {
+  try {
+    const noHash = String(u || "").split("#")[0];
+    return noHash.endsWith("/") && noHash.length > 8 ? noHash.slice(0, -1) : noHash;
+  } catch {
+    return String(u || "");
+  }
+}
+
 function RemoteContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -88,12 +104,22 @@ function RemoteContent() {
             reconnectRef.current = 0;
             if (imgRef.current) imgRef.current.src = `data:image/jpeg;base64,${msg.data}`;
           } else if (msg.type === "hello") {
-            // Reconnect resume: a fresh instance (or a scaled-away one)
-            // starts on a different page than where we were — steer it back.
-            const helloUrl = String(msg.url || "");
-            if (lastPageUrlRef.current && helloUrl !== lastPageUrlRef.current) {
-              send(ws, { type: "navigate", url: lastPageUrlRef.current });
-            }
+            // Reconnect resume — but never blindly. During OAuth the server
+            // legitimately sits on transient single-use pages (popups,
+            // Firebase __/auth/handler). Steering the browser on every
+            // mismatch rips popups out of the flow and lands the viewer on
+            // a blank handler page (single-use eventIds don't re-render).
+            // Only steer when the server clearly lost our place (fresh
+            // session sitting on the blank/home page); otherwise hands off.
+            const helloUrl = normUrl(String(msg.url || ""));
+            const last = normUrl(lastPageUrlRef.current || "");
+            const home = normUrl(urlParam || "");
+            if (!last || helloUrl === last) return;
+            const serverIsHome =
+              !helloUrl || helloUrl === "about:blank" || (!!home && helloUrl === home);
+            if (!serverIsHome) return; // mid-flow (popup/handler) — hands off
+            const pick = TRANSIENT_URL.test(last) ? home : last;
+            if (pick) send(ws, { type: "navigate", url: pick });
           } else if (msg.type === "nav") {
             setPageUrl(msg.url || "");
             setPageTitle(msg.title || "");
