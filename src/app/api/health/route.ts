@@ -122,8 +122,17 @@ export async function GET(req: NextRequest) {
       blob: !!process.env.BLOB_READ_WRITE_TOKEN,
       profileHttp: !!process.env.PROFILE_HTTP_URL,
       importToken: !!process.env.IMPORT_TOKEN,
+      // Which persistence-related env KEYS the runtime actually sees (names
+      // only, never values). Answers the classic misconfigurations at a
+      // glance: store created but not connected to the project (no *_READ_WRITE_TOKEN
+      // at all), connected with a custom prefix (e.g. BROWSE_BLOB_READ_WRITE_TOKEN
+      // — the app only reads BLOB_READ_WRITE_TOKEN), or scoped to Preview
+      // while this deployment is Production.
+      envKeys: Object.keys(process.env)
+        .filter((k) => /READ_WRITE_TOKEN|^BLOB|PROFILE_|^IMPORT_TOKEN$/i.test(k))
+        .sort(),
       hint: !process.env.BLOB_READ_WRITE_TOKEN && !process.env.PROFILE_HTTP_URL
-        ? "No profile/vault persistence: connect Vercel Blob (Project → Storage → Create Database → Blob → Connect, Production env) AND redeploy — env vars only apply to new deployments. Until then, every login vanishes with the instance."
+        ? "No profile/vault persistence: connect the Blob store to THIS project (Storage → browse-blob → Connect to Project → Production), then REDEPLOY — env vars only apply to new deployments. If envKeys shows a *different* *_READ_WRITE_TOKEN name, the store was connected with a custom env prefix; reconnect with the default BLOB prefix."
         : undefined,
     },
   });
