@@ -6,6 +6,17 @@ import { execSync } from "node:child_process";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+// Mirror of lib/env-blob.cjs (kept inline: route handlers can't cleanly
+// require the CJS helper through the bundler).
+function resolveBlobTokenKey(): string | null {
+  if (process.env.BLOB_READ_WRITE_TOKEN) return "BLOB_READ_WRITE_TOKEN";
+  return (
+    Object.keys(process.env)
+      .filter((k) => /^[A-Z0-9_]*_READ_WRITE_TOKEN$/.test(k) && process.env[k])
+      .sort()[0] || null
+  );
+}
+
 const PROXY_ASSETS = [
   "uv/uv.bundle.js",
   "uv/uv.client.js",
@@ -119,7 +130,8 @@ export async function GET(req: NextRequest) {
     // on every instance recycle (Vercel Hobby recycles aggressively) — the
     // classic "I logged in yesterday and it's gone" failure.
     persistence: {
-      blob: !!process.env.BLOB_READ_WRITE_TOKEN,
+      blob: resolveBlobTokenKey() !== null,
+      blobTokenKey: resolveBlobTokenKey(),
       profileHttp: !!process.env.PROFILE_HTTP_URL,
       importToken: !!process.env.IMPORT_TOKEN,
       // Which persistence-related env KEYS the runtime actually sees (names
@@ -131,8 +143,8 @@ export async function GET(req: NextRequest) {
       envKeys: Object.keys(process.env)
         .filter((k) => /READ_WRITE_TOKEN|^BLOB|PROFILE_|^IMPORT_TOKEN$/i.test(k))
         .sort(),
-      hint: !process.env.BLOB_READ_WRITE_TOKEN && !process.env.PROFILE_HTTP_URL
-        ? "No profile/vault persistence: connect the Blob store to THIS project (Storage → browse-blob → Connect to Project → Production), then REDEPLOY — env vars only apply to new deployments. If envKeys shows a *different* *_READ_WRITE_TOKEN name, the store was connected with a custom env prefix; reconnect with the default BLOB prefix."
+      hint: resolveBlobTokenKey() === null && !process.env.PROFILE_HTTP_URL
+        ? "No profile/vault persistence: the store must inject a *_READ_WRITE_TOKEN. In Vercel: Storage → browse-blob → copy the store's token (starts vercel_blob_rw_…) → Project Settings → Environment Variables → add BLOB_READ_WRITE_TOKEN (Production) → Redeploy. Creating the store alone injects nothing usable."
         : undefined,
     },
   });
