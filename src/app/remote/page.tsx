@@ -25,6 +25,7 @@ function RemoteContent() {
   const [pageTitle, setPageTitle] = useState("");
   const [input, setInput] = useState(urlParam);
   const [notice, setNotice] = useState<string | null>(null);
+  const [diag, setDiag] = useState<string | null>(null);
   const [profileState, setProfileState] = useState<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectRef = useRef(0);
@@ -100,6 +101,13 @@ function RemoteContent() {
             if (msg.url) lastPageUrlRef.current = String(msg.url);
           } else if (msg.type === "error") {
             setNotice(String(msg.message || "remote error"));
+          } else if (msg.type === "diagResult") {
+            try {
+              const { type, ...rest } = msg as Record<string, unknown>;
+              setDiag(JSON.stringify(rest, null, 1).slice(0, 4000));
+            } catch {
+              setDiag("diagnosis failed to parse");
+            }
           }
         } catch {
           // ignore malformed frames
@@ -248,6 +256,16 @@ function RemoteContent() {
         </form>
 
         <div className="flex items-center gap-2 px-2" title={pageTitle || pageUrl}>
+          <button
+            onClick={() => {
+              setDiag("collecting…");
+              send(wsRef.current, { type: "diag" });
+            }}
+            title="Capture page diagnosis (URL, console errors, hanging requests) — screenshot it if the page looks wrong"
+            className="hidden sm:inline text-xs px-1.5 py-0.5 rounded bg-neutral-800 text-neutral-400 hover:text-white"
+          >
+            Diagnose
+          </button>
           <span className={`h-2.5 w-2.5 rounded-full ${statusColor}`} />
           <span className="text-xs text-neutral-400 hidden sm:inline">
             {status === "live" ? "Real browser" : status}
@@ -274,6 +292,20 @@ function RemoteContent() {
 
       {/* Viewer */}
       <div className="flex-1 w-full relative bg-black flex items-center justify-center overflow-hidden">
+        {diag && (
+          <div className="absolute inset-0 z-30 overflow-auto bg-black/90 text-left p-4">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-sm font-semibold text-neutral-200">Page diagnosis (screenshot this if the page looks wrong)</span>
+              <button
+                onClick={() => setDiag(null)}
+                className="px-3 py-1 bg-neutral-800 rounded-lg hover:bg-neutral-700 text-sm"
+              >
+                Close
+              </button>
+            </div>
+            <pre className="text-xs text-neutral-300 whitespace-pre-wrap break-words font-mono">{diag}</pre>
+          </div>
+        )}
         {status !== "live" && (
           <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-4 bg-neutral-950 text-neutral-300 px-6 text-center">
             {status === "starting" && (
