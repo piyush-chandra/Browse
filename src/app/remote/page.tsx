@@ -103,8 +103,7 @@ function RemoteContent() {
             setNotice(String(msg.message || "remote error"));
           } else if (msg.type === "diagResult") {
             try {
-              const { type, ...rest } = msg as Record<string, unknown>;
-              setDiag(JSON.stringify(rest, null, 1).slice(0, 4000));
+              setDiag(JSON.stringify(msg, null, 1).slice(0, 4000));
             } catch {
               setDiag("diagnosis failed to parse");
             }
