@@ -106,6 +106,13 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({
     ok,
     customServer: bare.ok,
+    deploy: {
+      // NEXT_PUBLIC_ASSET_V is the git SHA on Vercel builds (see
+      // next.config.ts). If this doesn't match the commit you pushed,
+      // you're hitting an older deployment — redeploy.
+      assetV: process.env.NEXT_PUBLIC_ASSET_V || null,
+      vercelEnv: process.env.VERCEL_ENV || null,
+    },
     platform: {
       vercel: onVercel,
       vercelEnv: process.env.VERCEL_ENV || null,
