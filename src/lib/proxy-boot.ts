@@ -10,6 +10,12 @@ export const SW_URL = "/uv/sw.js";
 export const BAREMUX_WORKER = "/baremux/worker.js";
 export const TRANSPORT = "/baremod/index.mjs";
 
+// Per-deploy asset version (inlined at build time by next.config.ts).
+// Defeats poisoned caches: a corporate gateway (or browser) holding a 404
+// from the pre-UV era keys on the bare URL — a fresh ?v= is a new key.
+const ASSET_V = process.env.NEXT_PUBLIC_ASSET_V;
+const v = (src: string) => (ASSET_V ? `${src}?v=${ASSET_V}` : src);
+
 declare global {
   interface Window {
     BareMux?: {
@@ -78,7 +84,7 @@ function loadScript(src: string): Promise<void> {
       el.remove();
       reject(
         new Error(
-          `Failed to load ${src} (HTTP error). The proxy files may be missing — restart the app with \`npm run dev\`.`
+          `Failed to load ${src} (HTTP error). Hard-refresh once (Ctrl/Cmd+Shift+R) to evict stale caches; if it persists, the network may be filtering the proxy runtime.`
         )
       );
     });
@@ -94,30 +100,75 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
+/**
+ * Purge the legacy hand-rolled `/browse-sw.js` service worker, if present.
+ *
+ * Why this must run BEFORE loading any proxy asset: that SW (pre-UV builds,
+ * scope "/") intercepts every subresource of /browse and rewrites it to
+ * /api/browse?url=… — a route that no longer exists → the very first boot
+ * script (/baremux/index.js) 404s, and the cleanup further down would never
+ * run. Catch-22.
+ *
+ * unregister() alone doesn't uncontrol the CURRENT page (fetches keep
+ * routing to the doomed SW until unload), so after a purge we reload once.
+ * Returns true when a reload was triggered (callers: stop, page is going).
+ */
+const SW_PURGE_FLAG = "browse.legacy-sw-purged";
+async function purgeLegacyServiceWorker(): Promise<boolean> {
+  if (!("serviceWorker" in navigator)) return false;
+  let registrations: readonly ServiceWorkerRegistration[] = [];
+  try {
+    registrations = await navigator.serviceWorker.getRegistrations();
+  } catch {
+    return false;
+  }
+  const legacy = registrations.filter((registration) =>
+    [registration.installing, registration.waiting, registration.active].some(
+      (worker) => worker?.scriptURL.includes("/browse-sw.js")
+    )
+  );
+  if (legacy.length === 0) return false;
+  await Promise.all(legacy.map((registration) => registration.unregister()));
+  // Drop anything the old SW cached, so it can't resurface later.
+  try {
+    const keys = await caches.keys();
+    await Promise.all(keys.map((k) => caches.delete(k)));
+  } catch {}
+  // Reload exactly once (flag guards against loops if unregister failed).
+  try {
+    if (!sessionStorage.getItem(SW_PURGE_FLAG)) {
+      sessionStorage.setItem(SW_PURGE_FLAG, "1");
+      window.location.reload();
+      return true;
+    }
+    // Already reloaded once and it's STILL there — stop looping, let boot
+    // proceed and surface a normal error if the SW keeps interfering.
+    sessionStorage.removeItem(SW_PURGE_FLAG);
+  } catch {
+    window.location.reload();
+    return true;
+  }
+  return false;
+}
+
 export function initProxy(): Promise<void> {
   if (proxyReady) return proxyReady;
 
   proxyReady = (async () => {
-    await loadScript("/baremux/index.js");
-    await loadScript("/uv/uv.bundle.js");
+    // FIRST: purge the legacy SW before it can 404 our boot scripts.
+    if (await purgeLegacyServiceWorker()) {
+      // Page is reloading; never resolve.
+      await new Promise<void>(() => {});
+    }
+
+    await loadScript(v("/baremux/index.js"));
+    await loadScript(v("/uv/uv.bundle.js"));
 
     if (!("serviceWorker" in navigator)) {
       throw new Error("Service workers are not supported in this browser.");
     }
 
-    // Clean up the legacy hand-rolled proxy service worker, if present.
-    const registrations = await navigator.serviceWorker.getRegistrations();
-    await Promise.all(
-      registrations
-        .filter((registration) =>
-          [registration.installing, registration.waiting, registration.active].some(
-            (worker) => worker?.scriptURL.includes("/browse-sw.js")
-          )
-        )
-        .map((registration) => registration.unregister())
-    );
-
-    await navigator.serviceWorker.register(SW_URL, { scope: "/" });
+    await navigator.serviceWorker.register(v(SW_URL), { scope: "/" });
     await withTimeout(
       navigator.serviceWorker.ready,
       15000,
@@ -155,9 +206,9 @@ export function initProxy(): Promise<void> {
       throw new Error("bare-mux failed to load.");
     }
 
-    const connection = new window.BareMux.BareMuxConnection(BAREMUX_WORKER);
+    const connection = new window.BareMux.BareMuxConnection(v(BAREMUX_WORKER));
     await withTimeout(
-      connection.setTransport(TRANSPORT, [`${window.location.origin}/bare/`]),
+      connection.setTransport(v(TRANSPORT), [`${window.location.origin}/bare/`]),
       15000,
       "Proxy transport setup"
     );

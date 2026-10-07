@@ -1,6 +1,13 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  env: {
+    // Inlined into client bundles at build time; used to cache-bust the
+    // proxy runtime assets (see src/lib/proxy-boot.ts). Vercel provides
+    // VERCEL_GIT_COMMIT_SHA; local builds fall back to the build timestamp.
+    NEXT_PUBLIC_ASSET_V:
+      process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 8) || String(Date.now()),
+  },
   async headers() {
     // NOTE on ordering: when several rules match one path, the LAST rule
     // wins for a repeated header key (verified live: the generic pattern
