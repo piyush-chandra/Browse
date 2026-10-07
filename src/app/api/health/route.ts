@@ -116,7 +116,7 @@ export async function GET(req: NextRequest) {
     // Feature flags for deploy correlation: Docker builds don't get
     // VERCEL_GIT_COMMIT_SHA, so a timestamp can't tell you WHICH commit is
     // live. Extend this list when landing behavioral changes.
-    features: ["vault-refresh", "import-token-ui", "oidc-blob", "legacy-sw-purge", "remote-diag", "attach-hardening", "oauth-safe-steer", "remote-diagnose-btn", "no-silent-stream", "throttled-snapshots"],
+    features: ["vault-refresh", "import-token-ui", "oidc-blob", "legacy-sw-purge", "remote-diag", "attach-hardening", "oauth-safe-steer", "remote-diagnose-btn", "no-silent-stream", "throttled-snapshots", "first-paint-guarantee"],
     deploy: {
       // NEXT_PUBLIC_ASSET_V is the git SHA on Vercel builds (see
       // next.config.ts). If this doesn't match the commit you pushed,
