@@ -144,20 +144,19 @@ Log in once in the real browser, then use the FAST proxy for the site:
 
 ### Vercel Blob setup (2 minutes, once)
 
-1. Vercel dashboard → your Browse project → **Storage** tab → **Create Database → Blob** → name it → **Connect to Project** → pick the Browse project, environment **Production** (check Production AND Preview). This injects `BLOB_READ_WRITE_TOKEN`.
-2. **Redeploy — this is the step everyone misses.** Connecting a store does NOT touch running deployments: env vars only apply to *new* deployments. Deployments → ⋯ → Redeploy (or push any commit).
+1. Vercel dashboard → **Storage** → **Create Database → Blob** → name it → **Connect to Project** → pick this project, environments **Production** (and Preview). You do NOT need to copy any token: the app authenticates via OIDC using the injected store id (`BLOB_STORE_ID`; custom env prefixes work too).
+2. **Redeploy** (Deployments → ⋯ → Redeploy). Connecting a store never affects the running deployment — env vars only apply to *new* deployments. This is the step everyone misses.
 3. Optional hardening: add `IMPORT_TOKEN` (random string) to project env vars (Production) — cookie import and vault APIs then require `Authorization: Bearer <IMPORT_TOKEN>`. The **Use my login** button and import script support it (the UI prompts once and remembers it in that browser). Redeploy again after adding it.
 
-**Verify it actually took** (the #1 cause of "logins don't stick" is Blob connected-but-never-redeployed, or connected to Preview only):
+Fallback: if OIDC is disabled for your project (rare), copy the store's raw token (`vercel_blob_rw_…`, shown on the store page) and add it manually as `BLOB_READ_WRITE_TOKEN` (Production) — the app prefers a static token when present.
+
+**Verify it actually took** (the #1 cause of "logins don't stick" is connected-but-never-redeployed, or Preview-only scoping):
 
 ```bash
 curl -s https://YOUR-DEPLOYMENT/api/health | jq .persistence
-# want: {"blob":true,"profileHttp":false,"importToken":true}
+# want: {"blob":true,"blobMode":"oidc"|"token",...}
 curl -s https://YOUR-DEPLOYMENT/api/remote/profile   # want: {"provider":"vercel-blob","configured":true}
-curl -s https://YOUR-DEPLOYMENT/api/proxy/vault      # 401 if IMPORT_TOKEN set (good); want: {"configured":true,...}
 ```
-
-If `blob` is still `false` after connecting: you redeployed too early, scoped it to Preview, or connected the store to a different Vercel project.
 
 `/remote` on Vercel is resilient by design: the WebSocket is the rendezvous (it creates the session lazily on the instance holding the stream — no cross-instance 404s), auto-reconnects after Vercel's per-connection caps (≈5 min on Hobby) and steers the fresh instance back to the page you were on, with the persisted profile restored so you're still logged in.
 

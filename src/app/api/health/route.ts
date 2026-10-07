@@ -8,13 +8,20 @@ export const dynamic = "force-dynamic";
 
 // Mirror of lib/env-blob.cjs (kept inline: route handlers can't cleanly
 // require the CJS helper through the bundler).
-function resolveBlobTokenKey(): string | null {
-  if (process.env.BLOB_READ_WRITE_TOKEN) return "BLOB_READ_WRITE_TOKEN";
+function findEnvKey(re: RegExp): string | null {
   return (
     Object.keys(process.env)
-      .filter((k) => /^[A-Z0-9_]*_READ_WRITE_TOKEN$/.test(k) && process.env[k])
+      .filter((k) => re.test(k) && process.env[k])
       .sort()[0] || null
   );
+}
+function resolveBlobTokenKey(): string | null {
+  if (process.env.BLOB_READ_WRITE_TOKEN) return "BLOB_READ_WRITE_TOKEN";
+  return findEnvKey(/^[A-Z0-9_]*_READ_WRITE_TOKEN$/);
+}
+function resolveBlobStoreKey(): string | null {
+  if (process.env.BLOB_STORE_ID) return "BLOB_STORE_ID";
+  return findEnvKey(/^[A-Z0-9_]*_STORE_ID$/);
 }
 
 const PROXY_ASSETS = [
@@ -137,22 +144,32 @@ export async function GET(req: NextRequest) {
     // on every instance recycle (Vercel Hobby recycles aggressively) — the
     // classic "I logged in yesterday and it's gone" failure.
     persistence: {
-      blob: resolveBlobTokenKey() !== null,
+      // "token": static read/write token present. "oidc": no static token,
+      // but a store id is present — the SDK mints credentials at call time
+      // from VERCEL_OIDC_TOKEN (automatic on Vercel). No dashboard token
+      // hunt needed in that case.
+      blob: resolveBlobTokenKey() !== null || resolveBlobStoreKey() !== null,
+      blobMode:
+        resolveBlobTokenKey() !== null
+          ? "token"
+          : resolveBlobStoreKey() !== null
+            ? "oidc"
+            : null,
       blobTokenKey: resolveBlobTokenKey(),
+      blobStoreKey: resolveBlobStoreKey(),
       profileHttp: !!process.env.PROFILE_HTTP_URL,
       importToken: !!process.env.IMPORT_TOKEN,
       // Which persistence-related env KEYS the runtime actually sees (names
-      // only, never values). Answers the classic misconfigurations at a
-      // glance: store created but not connected to the project (no *_READ_WRITE_TOKEN
-      // at all), connected with a custom prefix (e.g. BROWSE_BLOB_READ_WRITE_TOKEN
-      // — the app only reads BLOB_READ_WRITE_TOKEN), or scoped to Preview
-      // while this deployment is Production.
+      // only, never values).
       envKeys: Object.keys(process.env)
-        .filter((k) => /READ_WRITE_TOKEN|^BLOB|PROFILE_|^IMPORT_TOKEN$/i.test(k))
+        .filter((k) => /READ_WRITE_TOKEN|^BLOB|PROFILE_|^IMPORT_TOKEN$|_STORE_ID$/i.test(k))
         .sort(),
-      hint: resolveBlobTokenKey() === null && !process.env.PROFILE_HTTP_URL
-        ? "No profile/vault persistence: the store must inject a *_READ_WRITE_TOKEN. In Vercel: Storage → browse-blob → copy the store's token (starts vercel_blob_rw_…) → Project Settings → Environment Variables → add BLOB_READ_WRITE_TOKEN (Production) → Redeploy. Creating the store alone injects nothing usable."
-        : undefined,
+      hint:
+        resolveBlobTokenKey() === null &&
+        resolveBlobStoreKey() === null &&
+        !process.env.PROFILE_HTTP_URL
+          ? "No profile/vault persistence: connect a Blob store to THIS project (Storage → browse-blob → Connect, Production) and REDEPLOY. A store id alone (OIDC mode) also works — no token copy needed."
+          : undefined,
     },
   });
 }
